@@ -20,4 +20,3 @@ type ExampleReply struct {
 }
 
 // Add your RPC definitions here.
-

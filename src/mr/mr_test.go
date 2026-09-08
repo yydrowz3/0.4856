@@ -14,12 +14,12 @@ func TestWc(t *testing.T) {
 		}
 	})
 	app := "../../mrapps/wc.so"
-	files := findFilesPre("../main", "pg*txt", "..")
+	files := findFilesPre("../main", "pg*txt", "..") // 因为上面mkOut了，所以要再嵌套一层..
 	mkCorrectOutput(files, app, "mr-wc-correct.txt")
 	runMR(files, app, 3)
 	mergeOutput("mr-wc-all.txt")
 	runCmp(t, "mr-wc-all.txt", "mr-wc-correct.txt",
-		"incorrect combined reduce output: mr-wc-all.txt vs mr-wc-correct.txt")
+		"incorrect combined reduce output: mr-wc-all.txt vs mr-wc-correct.txt") // 通过内部的 t.Fatalf 表示测试结果
 }
 
 func TestIndexer(t *testing.T) {

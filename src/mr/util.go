@@ -37,7 +37,7 @@ func runMRchan(files []string, app string, n int, c chan int, sock string) {
 	coord := exec.Command("../main/mrcoordinator", append([]string{sock}, files...)...)
 	coord.Stderr = os.Stderr
 	coord.Stdout = os.Stdout
-	if err := coord.Start(); err != nil {
+	if err := coord.Start(); err != nil { // .Run() 会同步等待，.Start() 异步启动
 		log.Fatalf("mr failed %v", err)
 	}
 
@@ -73,7 +73,7 @@ func RandString(n int) string {
 func coordinatorSock() string {
 	const N = 20
 	s := "/tmp/5840-mr-"
-	s += RandString(20)
+	s += RandString(N)
 	return s
 }
 
@@ -106,7 +106,7 @@ func mergeOutput(out string) {
 	if len(files) < 1 {
 		log.Fatalf("reduce created no mr-out-X output files!")
 	}
-	outputFile, err := os.Create(filepath.Join(tmp, out))
+	outputFile, err := os.Create(filepath.Join(tmp, out)) // 返回的是一个已经打开的文件对象
 	if err != nil {
 		log.Fatalf("create %v failed err %v", out, err)
 	}
@@ -137,7 +137,7 @@ func findFiles(dir, s string) []string {
 func findFilesPre(dir, s, pre string) []string {
 	files := findFiles(dir, s)
 	for i, f := range files {
-		files[i] = filepath.Join("..", f)
+		files[i] = filepath.Join(pre, f)
 	}
 	return files
 }
@@ -159,7 +159,7 @@ func runCmp(t *testing.T, f1, f2, msg string) {
 	cmd := exec.Command("cmp", f1, f2)
 	cmd.Dir = tmp
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Run(); err != nil { // cmp 通过返回码表示比较结果
 		t.Fatalf(msg)
 	}
 }
