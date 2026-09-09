@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -25,7 +26,10 @@ type taskMeta struct {
 
 type Coordinator struct {
 	// Your definitions here.
-
+	files    []string
+	nReduce  int
+	mapTasks []taskMeta
+	mu       sync.Mutex
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -39,11 +43,34 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 }
 
 func (c *Coordinator) RequestTask(args *RequestTaskArgs, reply *RequestTaskReply) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	reply.Type = TaskWait
+	for taskID := range c.mapTasks {
+		meta := &c.mapTasks[taskID]
+		if meta.Status != StatusIdle {
+			continue
+		}
+		meta.Status = StatusRunning
+		meta.StartedAt = time.Now()
+		meta.Attempt++
+
+		reply.Type = TaskMap
+		reply.TaskID = taskID
+		reply.Attempt = meta.Attempt
+		reply.Filename = c.files[taskID]
+		reply.NReduce = c.nReduce
+		reply.NMap = len(c.files)
+
+		log.Printf("assign map task=%d attemp=%d worker=%d file=%s", taskID, meta.Attempt, args.WorkerID, c.files[taskID])
+		return nil
+	}
 
 	return nil
 }
 
-func (c *Coordinator) ReportTask(args *ReportTaskArgs, reply *ReportTaskArgs) error {
+func (c *Coordinator) ReportTask(args *ReportTaskArgs, reply *ReportTaskReply) error {
 
 	return nil
 }
@@ -64,8 +91,8 @@ func (c *Coordinator) server(sockname string) {
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
 	// for test
-	ret := true
-	// ret := false
+	// ret := true
+	ret := false
 
 	// Your code here.
 
@@ -76,7 +103,11 @@ func (c *Coordinator) Done() bool {
 // main/mrcoordinator.go calls this function.
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(sockname string, files []string, nReduce int) *Coordinator {
-	c := Coordinator{}
+	c := Coordinator{
+		files:    files,
+		nReduce:  nReduce,
+		mapTasks: make([]taskMeta, len(files)),
+	}
 
 	// Your code here.
 

@@ -49,6 +49,8 @@ func Worker(sockname string, mapf func(string, string) []KeyValue,
 		switch reply.Type {
 		case TaskMap:
 			// handle map task
+			fmt.Printf("received map task: id=%d attempt=%d file=%s nReduce=%d nMap=%d\n", reply.TaskID, reply.Attempt, reply.Filename, reply.NReduce, reply.NMap)
+			return
 			// ok := runMapTask(reply, mapf)
 			// reportTask(workerID, reply, ok)
 		case TaskReduce:
