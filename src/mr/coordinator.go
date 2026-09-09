@@ -6,7 +6,22 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
+	"time"
 )
+
+type TaskStatus int
+
+const (
+	StatusIdle TaskStatus = iota
+	StatusRunning
+	StatusDone
+)
+
+type taskMeta struct {
+	Status    TaskStatus
+	StartedAt time.Time
+	Attempt   int
+}
 
 type Coordinator struct {
 	// Your definitions here.
@@ -23,9 +38,19 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 	return nil
 }
 
+func (c *Coordinator) RequestTask(args *RequestTaskArgs, reply *RequestTaskReply) error {
+
+	return nil
+}
+
+func (c *Coordinator) ReportTask(args *ReportTaskArgs, reply *ReportTaskArgs) error {
+
+	return nil
+}
+
 // start a thread that listens for RPCs from worker.go
 func (c *Coordinator) server(sockname string) {
-	rpc.Register(c)
+	rpc.Register(c) // 内部导出的方法可以被远程调用
 	rpc.HandleHTTP()
 	os.Remove(sockname)
 	l, e := net.Listen("unix", sockname)

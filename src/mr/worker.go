@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/rpc"
 	"os"
+	"time"
 )
 
 // Map functions return a slice of KeyValue.
@@ -35,6 +36,44 @@ func Worker(sockname string, mapf func(string, string) []KeyValue,
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
 
+	workerID := os.Getpid()
+	for {
+		args := RequestTaskArgs{
+			WorkerID: workerID,
+		}
+		reply := RequestTaskReply{}
+		if !call("Coordinator.RequestTask", &args, &reply) {
+			return
+		}
+
+		switch reply.Type {
+		case TaskMap:
+			// handle map task
+			// ok := runMapTask(reply, mapf)
+			// reportTask(workerID, reply, ok)
+		case TaskReduce:
+			// handle reduce task
+			// ok := runReduceTask(reply, reducef)
+			// reportTask(workerID, reply, ok)
+		case TaskWait:
+			time.Sleep(time.Second)
+		case TaskExit:
+			return
+		}
+	}
+}
+
+func reportTask(workerID int, task RequestTaskReply, success bool) bool {
+	args := ReportTaskArgs{
+		WorkerID: workerID,
+		Type:     task.Type,
+		TaskID:   task.TaskID,
+		Attempt:  task.Attempt,
+		Success:  success,
+	}
+	reply := ReportTaskReply{}
+
+	return call("Coordinator.ReportTask", &args, &reply)
 }
 
 // example function to show how to make an RPC call to the coordinator.
