@@ -26,10 +26,11 @@ type taskMeta struct {
 
 type Coordinator struct {
 	// Your definitions here.
-	files    []string
-	nReduce  int
-	mapTasks []taskMeta
-	mu       sync.Mutex
+	files       []string
+	nReduce     int
+	mapTasks    []taskMeta
+	reduceTasks []taskMeta
+	mu          sync.Mutex
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -47,27 +48,51 @@ func (c *Coordinator) RequestTask(args *RequestTaskArgs, reply *RequestTaskReply
 	defer c.mu.Unlock()
 
 	reply.Type = TaskWait
-	for taskID := range c.mapTasks {
-		meta := &c.mapTasks[taskID]
+
+	if !c.allMapsDoneLocked() {
+		for taskID := range c.mapTasks {
+			meta := &c.mapTasks[taskID]
+			if meta.Status != StatusIdle {
+				continue
+			}
+			meta.Status = StatusRunning
+			meta.StartedAt = time.Now()
+			meta.Attempt++
+
+			reply.Type = TaskMap
+			reply.TaskID = taskID
+			reply.Attempt = meta.Attempt
+			reply.Filename = c.files[taskID]
+			reply.NReduce = c.nReduce
+			reply.NMap = len(c.files)
+
+			log.Printf("assign map task=%d attemp=%d worker=%d file=%s", taskID, meta.Attempt, args.WorkerID, c.files[taskID])
+			return nil
+		}
+
+		return nil
+	}
+
+	for taskID := range c.reduceTasks {
+		meta := &c.reduceTasks[taskID]
 		if meta.Status != StatusIdle {
 			continue
 		}
 		meta.Status = StatusRunning
 		meta.StartedAt = time.Now()
 		meta.Attempt++
-
-		reply.Type = TaskMap
+		reply.Type = TaskReduce
 		reply.TaskID = taskID
 		reply.Attempt = meta.Attempt
-		reply.Filename = c.files[taskID]
-		reply.NReduce = c.nReduce
 		reply.NMap = len(c.files)
+		reply.NReduce = c.nReduce
 
-		log.Printf("assign map task=%d attemp=%d worker=%d file=%s", taskID, meta.Attempt, args.WorkerID, c.files[taskID])
+		log.Printf("assign reduce task=%d attemp=%d worker=%d", taskID, meta.Attempt, args.WorkerID)
 		return nil
 	}
-	if c.allMapsDoneLocked() {
-		log.Printf(("all map tasks finished"))
+
+	if c.allReducesDoneLocked() {
+		reply.Type = TaskExit
 	}
 
 	return nil
@@ -117,6 +142,16 @@ func (c *Coordinator) allMapsDoneLocked() bool {
 	return true
 }
 
+func (c *Coordinator) allReducesDoneLocked() bool {
+	for i := range c.reduceTasks {
+		if c.reduceTasks[i].Status != StatusDone {
+			return false
+		}
+	}
+
+	return true
+}
+
 // start a thread that listens for RPCs from worker.go
 func (c *Coordinator) server(sockname string) {
 	rpc.Register(c) // 内部导出的方法可以被远程调用
@@ -146,9 +181,10 @@ func (c *Coordinator) Done() bool {
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(sockname string, files []string, nReduce int) *Coordinator {
 	c := Coordinator{
-		files:    files,
-		nReduce:  nReduce,
-		mapTasks: make([]taskMeta, len(files)),
+		files:       files,
+		nReduce:     nReduce,
+		mapTasks:    make([]taskMeta, len(files)),
+		reduceTasks: make([]taskMeta, nReduce),
 	}
 
 	// Your code here.

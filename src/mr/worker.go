@@ -52,12 +52,12 @@ func Worker(sockname string, mapf func(string, string) []KeyValue,
 			// handle map task
 			// fmt.Printf("received map task: id=%d attempt=%d file=%s nReduce=%d nMap=%d\n", reply.TaskID, reply.Attempt, reply.Filename, reply.NReduce, reply.NMap)
 			success := runMapTask(reply, mapf)
-			reportTask(workerID, reply, success)
 			if !reportTask(workerID, reply, success) {
 				return
 			}
 		case TaskReduce:
 			// handle reduce task
+			fmt.Printf("received reduce task: id=%d attempt=%d nMap=%d\n", reply.TaskID, reply.Attempt, reply.NMap)
 			// ok := runReduceTask(reply, reducef)
 			// reportTask(workerID, reply, ok)
 		case TaskWait:
