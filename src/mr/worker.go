@@ -1,6 +1,7 @@
 package mr
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"log"
@@ -20,7 +21,7 @@ type KeyValue struct {
 func ihash(key string) int {
 	h := fnv.New32a()
 	h.Write([]byte(key))
-	return int(h.Sum32() & 0x7fffffff)
+	return int(h.Sum32() & 0x7fffffff) // 清除最高位, 保证int可以转换
 }
 
 var coordSockName string // socket for coordinator
@@ -49,10 +50,12 @@ func Worker(sockname string, mapf func(string, string) []KeyValue,
 		switch reply.Type {
 		case TaskMap:
 			// handle map task
-			fmt.Printf("received map task: id=%d attempt=%d file=%s nReduce=%d nMap=%d\n", reply.TaskID, reply.Attempt, reply.Filename, reply.NReduce, reply.NMap)
-			return
-			// ok := runMapTask(reply, mapf)
-			// reportTask(workerID, reply, ok)
+			// fmt.Printf("received map task: id=%d attempt=%d file=%s nReduce=%d nMap=%d\n", reply.TaskID, reply.Attempt, reply.Filename, reply.NReduce, reply.NMap)
+			success := runMapTask(reply, mapf)
+			reportTask(workerID, reply, success)
+			if !reportTask(workerID, reply, success) {
+				return
+			}
 		case TaskReduce:
 			// handle reduce task
 			// ok := runReduceTask(reply, reducef)
@@ -75,7 +78,92 @@ func reportTask(workerID int, task RequestTaskReply, success bool) bool {
 	}
 	reply := ReportTaskReply{}
 
-	return call("Coordinator.ReportTask", &args, &reply)
+	if !call("Coordinator.ReportTask", &args, &reply) {
+		return false
+	}
+	if !reply.Accepted {
+		log.Printf("task report rejected: type=%d task=%d attempt=%d", task.Type, task.TaskID, task.Attempt)
+	}
+
+	return true
+}
+
+func runMapTask(task RequestTaskReply, mapf func(string, string) []KeyValue) bool {
+	if task.NReduce <= 0 {
+		log.Printf("map task %d: invalid nReduce %d", task.TaskID, task.NReduce)
+		return false
+	}
+
+	// 1. Read the entire input file into memory.
+	content, err := os.ReadFile(task.Filename)
+	if err != nil {
+		log.Printf("map task %d: read %s: %v", task.TaskID, task.Filename, err)
+		return false
+	}
+
+	// 2. invoke the user-defined map function
+	kva := mapf(task.Filename, string(content))
+
+	// 3. partition the output into nReduce intermediate files
+	tempFiles := make([]*os.File, task.NReduce)
+	tempNames := make([]string, task.NReduce)
+	encoders := make([]*json.Encoder, task.NReduce) // json encoder 是写入文件，所以一个文件句柄对应一个 encoder
+
+	// remove temp files on exit (if fail on the way)
+	defer func() {
+		for _, file := range tempFiles {
+			if file != nil {
+				_ = file.Close()
+			}
+		}
+		for _, name := range tempNames {
+			if name != "" {
+				_ = os.Remove(name)
+			}
+		}
+	}()
+
+	// create temp file
+	for reduceID := 0; reduceID < task.NReduce; reduceID++ {
+		pattern := fmt.Sprintf(".mr-%d-%d-attempt-%d-*", task.TaskID, reduceID, task.Attempt)
+		file, err := os.CreateTemp(".", pattern)
+		if err != nil {
+			log.Printf("map task %d: create temp file: %v", task.TaskID, err)
+			return false
+		}
+		tempFiles[reduceID] = file
+		tempNames[reduceID] = file.Name()
+		encoders[reduceID] = json.NewEncoder(file)
+	}
+
+	// dump file content
+	for _, kv := range kva {
+		reduceID := ihash(kv.Key) % task.NReduce
+		if err := encoders[reduceID].Encode(&kv); err != nil {
+			log.Printf("map task %d: encode reduce partition %d: %v", task.TaskID, reduceID, err)
+			return false
+		}
+	}
+
+	// close temp file + rename
+	for reduceID, file := range tempFiles {
+		if err := file.Close(); err != nil {
+			log.Printf("map task %d: close partition %d: %v", task.TaskID, reduceID, err)
+			return false
+		}
+		tempFiles[reduceID] = nil
+	}
+
+	for reduceID, tempName := range tempNames {
+		finalName := fmt.Sprintf("mr-%d-%d", task.TaskID, reduceID)
+		if err := os.Rename(tempName, finalName); err != nil {
+			log.Printf("map task %d: rename %s to %s: %v", task.TaskID, tempName, finalName, err)
+			return false
+		}
+		tempNames[reduceID] = ""
+	}
+
+	return true
 }
 
 // example function to show how to make an RPC call to the coordinator.

@@ -23,7 +23,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	m := mr.MakeCoordinator(os.Args[1], os.Args[2:], 10)
+	m := mr.MakeCoordinator(os.Args[1], os.Args[2:], 10) // 会启动 10 个 reduce
 	for m.Done() == false {
 		time.Sleep(time.Second)
 	}

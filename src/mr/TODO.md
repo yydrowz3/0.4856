@@ -1,6 +1,6 @@
 - [x] 1. 定义 RPC 类型
 - [x] 2. Coordinator 分配 Map task
-- [ ] 3. Worker 执行 Map task
+- [x] 3. Worker 执行 Map task
 - [ ] 4. Coordinator 等待所有 Map 完成
 - [ ] 5. Worker 执行 Reduce task
 - [ ] 6. 实现 Done 和 Exit

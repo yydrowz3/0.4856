@@ -23,7 +23,7 @@ func startWorker(app string, i int, c chan int, sock string) {
 	if err := worker.Start(); err != nil {
 		log.Fatalf("mr failed %v", err)
 	}
-	go func(cmd *exec.Cmd, i int) {
+	go func(cmd *exec.Cmd, i int) { // 通过执行cmd，启动了一个新的进程，所有每个里面的 pid 都是不同的
 		cmd.Wait()
 		if c != nil {
 			c <- i

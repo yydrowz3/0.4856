@@ -66,13 +66,55 @@ func (c *Coordinator) RequestTask(args *RequestTaskArgs, reply *RequestTaskReply
 		log.Printf("assign map task=%d attemp=%d worker=%d file=%s", taskID, meta.Attempt, args.WorkerID, c.files[taskID])
 		return nil
 	}
+	if c.allMapsDoneLocked() {
+		log.Printf(("all map tasks finished"))
+	}
 
 	return nil
 }
 
 func (c *Coordinator) ReportTask(args *ReportTaskArgs, reply *ReportTaskReply) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	reply.Accepted = false
+	if args.Type != TaskMap {
+		return nil
+	}
+
+	if args.TaskID < 0 || args.TaskID >= len(c.mapTasks) {
+		return nil
+	}
+
+	meta := &c.mapTasks[args.TaskID]
+	if meta.Status != StatusRunning {
+		return nil
+	}
+	if meta.Attempt != args.Attempt {
+		return nil
+	}
+	reply.Accepted = true
+	meta.StartedAt = time.Time{}
+
+	if args.Success {
+		meta.Status = StatusDone
+		log.Printf("map task done: task=%d attempt=%d worker=%d", args.TaskID, args.Attempt, args.WorkerID)
+	} else {
+		meta.Status = StatusIdle
+		log.Printf("map task failed: task=%d attempt=%d worker=%d", args.TaskID, args.Attempt, args.WorkerID)
+	}
 
 	return nil
+}
+
+func (c *Coordinator) allMapsDoneLocked() bool {
+	for i := range c.mapTasks {
+		if c.mapTasks[i].Status != StatusDone {
+			return false
+		}
+	}
+
+	return true
 }
 
 // start a thread that listens for RPCs from worker.go
