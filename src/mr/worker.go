@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"log"
 	"net/rpc"
 	"os"
+	"sort"
 	"time"
 )
 
@@ -50,7 +52,7 @@ func Worker(sockname string, mapf func(string, string) []KeyValue,
 		switch reply.Type {
 		case TaskMap:
 			// handle map task
-			// fmt.Printf("received map task: id=%d attempt=%d file=%s nReduce=%d nMap=%d\n", reply.TaskID, reply.Attempt, reply.Filename, reply.NReduce, reply.NMap)
+			fmt.Printf("received map task: id=%d attempt=%d file=%s nReduce=%d nMap=%d\n", reply.TaskID, reply.Attempt, reply.Filename, reply.NReduce, reply.NMap)
 			success := runMapTask(reply, mapf)
 			if !reportTask(workerID, reply, success) {
 				return
@@ -58,8 +60,10 @@ func Worker(sockname string, mapf func(string, string) []KeyValue,
 		case TaskReduce:
 			// handle reduce task
 			fmt.Printf("received reduce task: id=%d attempt=%d nMap=%d\n", reply.TaskID, reply.Attempt, reply.NMap)
-			// ok := runReduceTask(reply, reducef)
-			// reportTask(workerID, reply, ok)
+			success := runReduceTask(reply, reducef)
+			if !reportTask(workerID, reply, success) {
+				return
+			}
 		case TaskWait:
 			time.Sleep(time.Second)
 		case TaskExit:
@@ -136,7 +140,7 @@ func runMapTask(task RequestTaskReply, mapf func(string, string) []KeyValue) boo
 		encoders[reduceID] = json.NewEncoder(file)
 	}
 
-	// dump file content
+	// 4. dump file content
 	for _, kv := range kva {
 		reduceID := ihash(kv.Key) % task.NReduce
 		if err := encoders[reduceID].Encode(&kv); err != nil {
@@ -163,6 +167,94 @@ func runMapTask(task RequestTaskReply, mapf func(string, string) []KeyValue) boo
 		tempNames[reduceID] = ""
 	}
 
+	return true
+}
+
+func runReduceTask(task RequestTaskReply, reducef func(string, []string) string) bool {
+	intermediate := make([]KeyValue, 0)
+
+	// 1. read intermediate file
+	for mapID := 0; mapID < task.NMap; mapID++ {
+		filename := fmt.Sprintf("mr-%d-%d", mapID, task.TaskID)
+		file, err := os.Open(filename)
+		if err != nil {
+			log.Printf("reduce task %d: open %s: %v", task.TaskID, filename, err)
+			return false
+		}
+		decoder := json.NewDecoder(file)
+		for {
+			var kv KeyValue
+			err := decoder.Decode(&kv)
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				_ = file.Close()
+				log.Printf("reduce task %d: decode %s: %v", task.TaskID, filename, err)
+				return false
+			}
+			intermediate = append(intermediate, kv)
+		}
+		if err := file.Close(); err != nil {
+			log.Printf("reduce task %d: close %s: %v", task.TaskID, filename, err)
+			return false
+		}
+	}
+
+	// 2. sort intermediate by key
+	sort.Slice(intermediate, func(i, j int) bool {
+		return intermediate[i].Key < intermediate[j].Key
+	})
+
+	// 3. create temp output file
+	tempFile, err := os.CreateTemp(".", fmt.Sprintf(".mr-out-%d-attempt-%d-*", task.TaskID, task.Attempt))
+	if err != nil {
+		log.Printf("reduce task %d: create temp output: %v", task.TaskID, err)
+		return false
+	}
+
+	tempName := tempFile.Name()
+	defer func() {
+		if tempFile != nil {
+			_ = tempFile.Close()
+		}
+		if tempName != "" {
+			_ = os.Remove(tempName)
+		}
+	}()
+
+	// 4. apply reduce function to intermedate with same key
+	for i := 0; i < len(intermediate); {
+		j := i + 1
+		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+			j++
+		}
+
+		values := make([]string, 0, j-i)
+		for k := i; k < j; k++ {
+			values = append(values, intermediate[k].Value)
+		}
+		output := reducef(intermediate[i].Key, values)
+		if _, err := fmt.Fprintf(tempFile, "%v %v\n", intermediate[i].Key, output); err != nil {
+			log.Printf("reduce task %d: write output: %v", task.TaskID, err)
+			return false
+		}
+		i = j
+	}
+
+	// 5. close tempFile + rename
+	if err := tempFile.Close(); err != nil {
+		log.Printf("reduce task %d: close output: %v", task.TaskID, err)
+		return false
+	}
+	tempFile = nil
+
+	finalName := fmt.Sprintf("mr-out-%d", task.TaskID)
+	if err := os.Rename(tempName, finalName); err != nil {
+		log.Printf("reduce task %d: rename %s to %s: %v", task.TaskID, tempName, finalName, err)
+		return false
+	}
+	tempName = ""
 	return true
 }
 

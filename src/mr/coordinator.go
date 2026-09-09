@@ -103,30 +103,47 @@ func (c *Coordinator) ReportTask(args *ReportTaskArgs, reply *ReportTaskReply) e
 	defer c.mu.Unlock()
 
 	reply.Accepted = false
-	if args.Type != TaskMap {
+
+	var meta *taskMeta
+	var taskName string
+	switch args.Type {
+	case TaskMap:
+		if args.TaskID < 0 || args.TaskID >= len(c.mapTasks) {
+			return nil
+		}
+		meta = &c.mapTasks[args.TaskID]
+		taskName = "map"
+	case TaskReduce:
+		// Reduce happens only after all map tasks are done
+		if !c.allMapsDoneLocked() {
+			return nil
+		}
+		if args.TaskID < 0 || args.TaskID >= len(c.reduceTasks) {
+			return nil
+		}
+		meta = &c.reduceTasks[args.TaskID]
+		taskName = "reduce"
+	default:
 		return nil
 	}
 
-	if args.TaskID < 0 || args.TaskID >= len(c.mapTasks) {
-		return nil
-	}
-
-	meta := &c.mapTasks[args.TaskID]
+	// refuce duplicated report and outdated report
 	if meta.Status != StatusRunning {
 		return nil
 	}
 	if meta.Attempt != args.Attempt {
 		return nil
 	}
+
 	reply.Accepted = true
 	meta.StartedAt = time.Time{}
 
 	if args.Success {
 		meta.Status = StatusDone
-		log.Printf("map task done: task=%d attempt=%d worker=%d", args.TaskID, args.Attempt, args.WorkerID)
+		log.Printf("%s task done: task=%d attempt=%d worker=%d", taskName, args.TaskID, args.Attempt, args.WorkerID)
 	} else {
 		meta.Status = StatusIdle
-		log.Printf("map task failed: task=%d attempt=%d worker=%d", args.TaskID, args.Attempt, args.WorkerID)
+		log.Printf("%s task failed: task=%d attempt=%d worker=%d", taskName, args.TaskID, args.Attempt, args.WorkerID)
 	}
 
 	return nil
@@ -167,13 +184,11 @@ func (c *Coordinator) server(sockname string) {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
-	// for test
-	// ret := true
-	ret := false
-
 	// Your code here.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.allMapsDoneLocked() && c.allReducesDoneLocked()
 
-	return ret
 }
 
 // create a Coordinator.
