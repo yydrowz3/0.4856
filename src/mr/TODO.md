@@ -5,8 +5,8 @@
 - [x] 4. Coordinator 等待所有 Map 完成
 - [x] 5. Worker 执行 Reduce task
 - [x] 6. 实现 Done 和 Exit
-- [ ] 7. 加入任务超时重试
-- [ ] 9. 运行 crash、parallel、early-exit 测试
+- [x] 7. 加入任务超时重试
+- [x] 9. 运行 crash、parallel、early-exit 测试
 
 
 ---

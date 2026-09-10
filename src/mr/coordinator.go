@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const taskTimeout = 10 * time.Second
+
 type TaskStatus int
 
 const (
@@ -48,15 +50,23 @@ func (c *Coordinator) RequestTask(args *RequestTaskArgs, reply *RequestTaskReply
 	defer c.mu.Unlock()
 
 	reply.Type = TaskWait
+	now := time.Now()
 
+	// Map phase
 	if !c.allMapsDoneLocked() {
 		for taskID := range c.mapTasks {
 			meta := &c.mapTasks[taskID]
-			if meta.Status != StatusIdle {
+
+			if !taskAssignable(meta, now) {
 				continue
 			}
+
+			if meta.Status == StatusRunning {
+				log.Printf("map task timeout: task=%d attempt=%d", taskID, meta.Attempt)
+			}
+
 			meta.Status = StatusRunning
-			meta.StartedAt = time.Now()
+			meta.StartedAt = now
 			meta.Attempt++
 
 			reply.Type = TaskMap
@@ -66,28 +76,35 @@ func (c *Coordinator) RequestTask(args *RequestTaskArgs, reply *RequestTaskReply
 			reply.NReduce = c.nReduce
 			reply.NMap = len(c.files)
 
-			log.Printf("assign map task=%d attemp=%d worker=%d file=%s", taskID, meta.Attempt, args.WorkerID, c.files[taskID])
+			// log.Printf("assign map task=%d attemp=%d worker=%d file=%s", taskID, meta.Attempt, args.WorkerID, c.files[taskID])
 			return nil
 		}
 
+		// not job all done, but doing normally
 		return nil
 	}
 
+	// Reduce phase
 	for taskID := range c.reduceTasks {
 		meta := &c.reduceTasks[taskID]
-		if meta.Status != StatusIdle {
+		if !taskAssignable(meta, now) {
 			continue
 		}
+		if meta.Status == StatusRunning {
+			log.Printf("reduce task timeout: task=%d attempt=%d", taskID, meta.Attempt)
+		}
+
 		meta.Status = StatusRunning
-		meta.StartedAt = time.Now()
+		meta.StartedAt = now
 		meta.Attempt++
+
 		reply.Type = TaskReduce
 		reply.TaskID = taskID
 		reply.Attempt = meta.Attempt
 		reply.NMap = len(c.files)
 		reply.NReduce = c.nReduce
 
-		log.Printf("assign reduce task=%d attemp=%d worker=%d", taskID, meta.Attempt, args.WorkerID)
+		// log.Printf("assign reduce task=%d attemp=%d worker=%d", taskID, meta.Attempt, args.WorkerID)
 		return nil
 	}
 
@@ -167,6 +184,14 @@ func (c *Coordinator) allReducesDoneLocked() bool {
 	}
 
 	return true
+}
+
+func taskAssignable(meta *taskMeta, now time.Time) bool {
+	if meta.Status == StatusIdle {
+		return true
+	}
+
+	return meta.Status == StatusRunning && now.Sub(meta.StartedAt) >= taskTimeout
 }
 
 // start a thread that listens for RPCs from worker.go

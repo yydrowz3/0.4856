@@ -129,7 +129,7 @@ func runMapTask(task RequestTaskReply, mapf func(string, string) []KeyValue) boo
 
 	// create temp file
 	for reduceID := 0; reduceID < task.NReduce; reduceID++ {
-		pattern := fmt.Sprintf(".mr-%d-%d-attempt-%d-*", task.TaskID, reduceID, task.Attempt)
+		pattern := fmt.Sprintf("mr-tmp-map-%d-%d-attempt-%d-*", task.TaskID, reduceID, task.Attempt)
 		file, err := os.CreateTemp(".", pattern)
 		if err != nil {
 			log.Printf("map task %d: create temp file: %v", task.TaskID, err)
@@ -207,7 +207,7 @@ func runReduceTask(task RequestTaskReply, reducef func(string, []string) string)
 	})
 
 	// 3. create temp output file
-	tempFile, err := os.CreateTemp(".", fmt.Sprintf(".mr-out-%d-attempt-%d-*", task.TaskID, task.Attempt))
+	tempFile, err := os.CreateTemp(".", fmt.Sprintf("mr-tmp-out-%d-attempt-%d-*", task.TaskID, task.Attempt))
 	if err != nil {
 		log.Printf("reduce task %d: create temp output: %v", task.TaskID, err)
 		return false
