@@ -1,5 +1,5 @@
 
-- [X] Key/value server with reliable network
+- [x] Key/value server with reliable network
 
 Your first task is to implement a solution that works when there are no dropped messages. You'll need to add RPC-sending code to the Clerk Put/Get methods in client.go, and implement Put and Get RPC handlers in server.go.
 
@@ -7,7 +7,9 @@ You have completed this task when you pass the Reliable tests in the test suite:
 
 `make RUN="-run Reliable" kvsrv1`
 
-- [ ] Implementing a lock using key/value clerk
+- [x] Implementing a lock using key/value clerk
+
+KV 的 version 相当于 CAS 版本号 (compare-and-swap)
 
 Implement Acquire and Release. You have completed this exercise when your code passes these tests: 
 
