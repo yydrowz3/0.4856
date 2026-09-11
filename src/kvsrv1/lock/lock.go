@@ -33,40 +33,65 @@ func MakeLock(ck kvtest.IKVClerk, lockname string) *Lock {
 	return lk
 }
 
+func (lk *Lock) lockTry(version rpc.Tversion) bool {
+
+	acquireErr := lk.ck.Put(lk.lockname, lk.ownerID, version)
+	if acquireErr == rpc.OK {
+		return true
+	}
+
+	if acquireErr == rpc.ErrMaybe {
+		tmpValue, _, tmpErr := lk.ck.Get(lk.lockname)
+		if tmpErr == rpc.OK && tmpValue == lk.ownerID {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (lk *Lock) Acquire() {
 	// Your code here
 	for {
 		value, version, err := lk.ck.Get(lk.lockname)
-		if err == rpc.ErrNoKey { // first, create lock kv
-			err = lk.ck.Put(lk.lockname, lk.ownerID, 0)
-			if err == rpc.OK {
+		if err == rpc.OK {
+			if value == lk.ownerID { // already acquired lock
 				return
 			}
-		}
-		if err == rpc.OK {
-			if value == "" { // lock is available
-				err = lk.ck.Put(lk.lockname, lk.ownerID, version) // may fail with ErrVersion
-				if err == rpc.OK {
+			if value == "" {
+				if lk.lockTry(version) {
 					return
 				}
-				if err == rpc.ErrMaybe {
-					value, _, tmpErr := lk.ck.Get(lk.lockname)
-					if tmpErr == rpc.OK && value == lk.ownerID {
-						return
-					}
-				}
-			} else { // lock is held by someone else, wait and retry
-				continue
+				// acquireErr := lk.ck.Put(lk.lockname, lk.ownerID, version)
+				// if acquireErr == rpc.OK {
+				// 	return
+				// }
+
+				// if acquireErr == rpc.ErrMaybe {
+				// 	tmpValue, _, tmpErr := lk.ck.Get(lk.lockname)
+				// 	if tmpErr == rpc.OK && tmpValue == lk.ownerID {
+				// 		return
+				// 	}
+				// }
 			}
 		}
-		if err == rpc.ErrMaybe {
-			value, _, tmpErr := lk.ck.Get(lk.lockname)
-			if tmpErr == rpc.OK && value == lk.ownerID {
+		if err == rpc.ErrNoKey { // currently no lock, try to create it
+			if lk.lockTry(version) {
 				return
 			}
+			// acquireErr := lk.ck.Put(lk.lockname, lk.ownerID, version)
+			// if acquireErr == rpc.OK {
+			// 	return
+			// }
+			// if acquireErr == rpc.ErrMaybe {
+			// 	tmpValue, _, tmpErr := lk.ck.Get(lk.lockname)
+			// 	if tmpErr == rpc.OK && tmpValue == lk.ownerID {
+			// 		return
+			// 	}
+			// }
 		}
 
-		time.Sleep(time.Second)
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
@@ -81,19 +106,22 @@ func (lk *Lock) Release() {
 			if value == "" {
 				return
 			}
-			if value == lk.ownerID {
-				err = lk.ck.Put(lk.lockname, "", version)
-			} else {
+			if value != lk.ownerID {
 				return
 			}
-		}
-		if err == rpc.ErrMaybe {
-			value, _, tmpErr := lk.ck.Get(lk.lockname)
-			if tmpErr == rpc.OK && value == "" {
+			// value == lk.ownerID
+			releaseErr := lk.ck.Put(lk.lockname, "", version)
+			if releaseErr == rpc.OK {
 				return
+			}
+			if releaseErr == rpc.ErrMaybe {
+				tmpValue, _, tmpErr := lk.ck.Get(lk.lockname)
+				if tmpErr == rpc.OK && tmpValue != lk.ownerID {
+					return
+				}
 			}
 		}
 
-		time.Sleep(time.Second)
+		time.Sleep(100 * time.Millisecond)
 	}
 }
