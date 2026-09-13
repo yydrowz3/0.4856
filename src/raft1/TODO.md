@@ -4,6 +4,9 @@ https://pdos.csail.mit.edu/6.824/labs/lab-raft1.html
 
 Implement Raft leader election and heartbeats (AppendEntries RPCs with no log entries). The goal for Part 3A is for a single leader to be elected, for the leader to remain the leader if there are no failures, and for a new leader to take over if the old leader fails or if packets to/from the old leader are lost. Run make RUN="-run 3A" raft1 in the src directory to test your 3A code. 
 
+  - [ ] Leader Election
+  - [ ] Hearbeat
+
 > Follow the paper's Figure 2. At this point you care about sending and receiving RequestVote RPCs, the Rules for Servers that relate to elections, and the State related to leader election,
 > Add the Figure 2 state for leader election to the Raft struct in raft.go.
 > Fill in the RequestVoteArgs and RequestVoteReply structs. Modify Make() to create a background goroutine that will kick off leader election periodically by sending out RequestVote RPCs when it hasn't heard from another peer for a while. Implement the RequestVote() RPC handler so that servers will vote for one another.
