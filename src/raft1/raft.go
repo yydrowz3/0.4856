@@ -159,10 +159,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	defer rf.mu.Unlock()
 
 	reply.VoteGranted = false
-	reply.Term = rf.currentTerm
 
 	// 旧任期请求
 	if args.Term < rf.currentTerm {
+		reply.Term = rf.currentTerm
 		return
 	}
 
@@ -177,6 +177,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.VoteGranted = true
 		rf.resetElectionTimerLocked() // Optional?
 	}
+	reply.Term = rf.currentTerm
 }
 
 type AppendEntriesArgs struct {
@@ -193,15 +194,16 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	reply.Term = rf.currentTerm
 	if args.Term < rf.currentTerm {
 		reply.Success = false
+		reply.Term = rf.currentTerm
 		return
 	}
 
 	reply.Success = true
 	rf.becomeFollowerLocked(args.Term) // 收到心跳，说明已经产生 Leader
-	rf.resetElectionTimerLocked()      // 一段时间没有收到心跳，开始选举
+	reply.Term = rf.currentTerm
+	rf.resetElectionTimerLocked() // 一段时间没有收到心跳，开始选举
 }
 
 // example code to send a RequestVote RPC to a server.
