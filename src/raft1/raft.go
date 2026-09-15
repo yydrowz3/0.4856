@@ -46,14 +46,38 @@ type Raft struct {
 	electionTimeout   time.Duration
 }
 
+const heartbeatInterval = 150 * time.Millisecond
+
+func randomElectionTimeout() time.Duration {
+	return time.Duration(400+rand.Intn(300)) * time.Millisecond
+}
+
+func (rf *Raft) resetElectionTimerLocked() {
+	rf.lastElectionReset = time.Now()
+	rf.electionTimeout = randomElectionTimeout()
+}
+
+func (rf *Raft) becomeFollowerLocked(term int) { // 同 任期 不能清空voted，否则会再次投票
+	if term > rf.currentTerm {
+		rf.currentTerm = term
+		rf.votedFor = -1
+	}
+	rf.role = Follower
+}
+
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-
-	var term int
-	var isleader bool
+	// var term int
+	// var isleader bool
 	// Your code here (3A).
-	return term, isleader
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	return rf.currentTerm, rf.role == Leader
+
+	// return term, isleader
 }
 
 // save Raft's persistent state to stable storage,
@@ -131,6 +155,28 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (3A, 3B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	reply.VoteGranted = false
+	reply.Term = rf.currentTerm
+
+	// 旧任期请求
+	if args.Term < rf.currentTerm {
+		return
+	}
+
+	// 新任期
+	if args.Term > rf.currentTerm {
+		rf.becomeFollowerLocked(args.Term)
+	}
+
+	canVote := rf.votedFor == -1 || rf.votedFor == args.CandidateId // 防止 回复丢包
+	if canVote {
+		rf.votedFor = args.CandidateId
+		reply.VoteGranted = true
+		rf.resetElectionTimerLocked() // Optional?
+	}
 }
 
 type AppendEntriesArgs struct {
@@ -144,7 +190,18 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
+	reply.Term = rf.currentTerm
+	if args.Term < rf.currentTerm {
+		reply.Success = false
+		return
+	}
+
+	reply.Success = true
+	rf.becomeFollowerLocked(args.Term) // 收到心跳，说明已经产生 Leader
+	rf.resetElectionTimerLocked()      // 一段时间没有收到心跳，开始选举
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -176,6 +233,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 // the struct itself.
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	return ok
+}
+
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	return ok
 }
 
@@ -267,6 +329,52 @@ func (rf *Raft) ticker() {
 		// milliseconds.
 		ms := 50 + (rand.Int63() % 300)
 		time.Sleep(time.Duration(ms) * time.Millisecond)
+	}
+}
+
+func (rf *Raft) startElection() {
+
+}
+
+func (rf *Raft) heartbeatTicker() { // the leader sends heartbeats no more than 10 times per second
+	for {
+		time.Sleep(heartbeatInterval)
+		rf.broadcastHeartbeats()
+	}
+
+}
+
+func (rf *Raft) broadcastHeartbeats() {
+	rf.mu.Lock()
+	if rf.role != Leader {
+		rf.mu.Unlock()
+		return
+	}
+	args := AppendEntriesArgs{
+		Term:     rf.currentTerm,
+		LeaderId: rf.me,
+	}
+	rf.mu.Unlock()
+
+	for peer := range rf.peers {
+		if peer == rf.me {
+			continue
+		}
+		go func(server int, request AppendEntriesArgs) {
+			var reply AppendEntriesReply
+
+			ok := rf.sendAppendEntries(server, &request, &reply)
+			if !ok {
+				return
+			}
+			rf.mu.Lock()
+			defer rf.mu.Unlock()
+
+			if reply.Term > rf.currentTerm {
+				rf.becomeFollowerLocked(reply.Term)
+				rf.resetElectionTimerLocked()
+			}
+		}(peer, args)
 	}
 }
 
