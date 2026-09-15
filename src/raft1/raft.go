@@ -27,6 +27,11 @@ const (
 	Leader
 )
 
+type LogEntry struct {
+	Term    int
+	Command any
+}
+
 // A Go object implementing a single Raft peer.
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
@@ -44,6 +49,19 @@ type Raft struct {
 
 	lastElectionReset time.Time
 	electionTimeout   time.Duration
+
+	log         []LogEntry
+	commitIndex int
+	lastApplied int
+
+	nextIndex  []int
+	matchIndex []int
+
+	applyCh   chan raftapi.ApplyMsg
+	applyCond *sync.Cond
+
+	lastLogIndex int
+	lastLogTerm  int
 }
 
 const heartbeatInterval = 150 * time.Millisecond
@@ -181,13 +199,24 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 }
 
 type AppendEntriesArgs struct {
+	// lab3a
 	Term     int
 	LeaderId int
+	// lab3b
+	PrevLogIndex int
+	PrevLogTerm  int
+	Entries      []LogEntry
+	LeaderCommit int
 }
 
 type AppendEntriesReply struct {
+	// lab3a
 	Term    int
 	Success bool
+	// lab3b
+	ConflictIndex int
+	ConflictTerm  int
+	ConflictLen   int
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -260,6 +289,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (3B).
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
 	return index, term, isLeader
 }
@@ -418,6 +450,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.role = Follower
 	rf.resetElectionTimerLocked()
 	// rf.electionTimeout = time.Duration(150+rand.Intn(150)) * time.Millisecond
+
+	rf.log = make([]LogEntry, 0)
+	rf.log = append(rf.log, LogEntry{Term: 0})
+	rf.commitIndex = 0
+	rf.lastApplied = 0
+	rf.applyCh = applyCh
+	rf.applyCond = sync.NewCond(&rf.mu)
+	rf.lastLogIndex = 0
+	rf.lastLogTerm = 0
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
