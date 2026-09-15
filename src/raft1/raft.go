@@ -267,73 +267,89 @@ func (rf *Raft) ticker() {
 
 		// Your code here (3A)
 		// Check if a leader election should be started.
-		rf.mu.Lock()
-
-		if rf.role != Leader && time.Since(rf.lastElectionReset) >= rf.electionTimeout {
-			rf.role = Candidate
-			rf.currentTerm++
-			rf.votedFor = rf.me
-			votes := 1
-
-			args := &RequestVoteArgs{
-				Term:         rf.currentTerm,
-				CandidateId:  rf.me,
-				LastLogIndex: 0, // placeholder
-				LastLogTerm:  0, // placeholder
-			}
-			reply := &RequestVoteReply{}
-
-			rf.mu.Unlock()
-
-			for i := range rf.peers {
-				if i != rf.me {
-					go func(server int) {
-						ok := rf.sendRequestVote(i, args, reply)
-						if ok {
-							rf.mu.Lock()
-							defer rf.mu.Unlock()
-							if rf.role != Candidate {
-								return
-							}
-							if reply.Term < rf.currentTerm {
-								return
-							}
-							if reply.Term > rf.currentTerm {
-								rf.currentTerm = reply.Term
-								rf.role = Follower
-								rf.votedFor = -1
-								rf.lastElectionReset = time.Now()
-								return
-							}
-							if reply.VoteGranted {
-								votes++
-								if votes > len(rf.peers)/2 {
-									rf.role = Leader
-									// heartbeat all
-								}
-							}
-						}
-					}(i)
-
-				}
-
-			}
-
-		} else {
-			rf.mu.Unlock()
-		}
 
 		// release lock before sending RPCs
 
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
-		ms := 50 + (rand.Int63() % 300)
-		time.Sleep(time.Duration(ms) * time.Millisecond)
+		// ms := 50 + (rand.Int63() % 300)
+		// time.Sleep(time.Duration(ms) * time.Millisecond)
+
+		time.Sleep(10 * time.Millisecond)
+		rf.startElection()
 	}
 }
 
 func (rf *Raft) startElection() {
+	rf.mu.Lock()
 
+	if rf.role == Leader || time.Since(rf.lastElectionReset) < rf.electionTimeout {
+		rf.mu.Unlock()
+		return
+	}
+
+	rf.role = Candidate
+	rf.currentTerm++
+	rf.votedFor = rf.me
+	rf.resetElectionTimerLocked()
+
+	electionTerm := rf.currentTerm
+	votes := 1
+	majority := len(rf.peers)/2 + 1
+
+	args := RequestVoteArgs{
+		Term:         electionTerm,
+		CandidateId:  rf.me,
+		LastLogIndex: 0,
+		LastLogTerm:  0,
+	}
+
+	if votes >= majority {
+		rf.role = Leader
+		rf.mu.Unlock()
+		rf.broadcastHeartbeats()
+		return
+	}
+
+	rf.mu.Unlock()
+
+	for peer := range rf.peers {
+		if peer == rf.me {
+			continue
+		}
+		go func(server int, request RequestVoteArgs) {
+			var reply RequestVoteReply
+
+			ok := rf.sendRequestVote(server, &request, &reply)
+			if !ok {
+				return
+			}
+
+			becameLeader := false
+			rf.mu.Lock()
+
+			if reply.Term > rf.currentTerm {
+				rf.becomeFollowerLocked(reply.Term)
+				rf.resetElectionTimerLocked()
+				rf.mu.Unlock()
+				return
+			}
+
+			if rf.role == Candidate && rf.currentTerm == electionTerm && reply.Term == electionTerm && reply.VoteGranted {
+				votes++
+				if votes >= majority {
+					rf.role = Leader
+					becameLeader = true
+				}
+			}
+
+			rf.mu.Unlock()
+			if becameLeader {
+				rf.broadcastHeartbeats()
+			}
+
+		}(peer, args)
+	}
 }
 
 func (rf *Raft) heartbeatTicker() { // the leader sends heartbeats no more than 10 times per second
@@ -398,15 +414,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.currentTerm = 0
 	rf.votedFor = -1
 	rf.role = Follower
-	rf.lastElectionReset = time.Now()
+	rf.resetElectionTimerLocked()
 	// rf.electionTimeout = time.Duration(150+rand.Intn(150)) * time.Millisecond
-	rf.electionTimeout = time.Duration(400+rand.Intn(300)) * time.Millisecond
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
+	go rf.heartbeatTicker()
 
 	return rf
 }
