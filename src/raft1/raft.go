@@ -83,6 +83,21 @@ func (rf *Raft) becomeFollowerLocked(term int) { // 同 任期 不能清空voted
 	rf.role = Follower
 }
 
+func (rf *Raft) becomeLeaderLocked() {
+	rf.role = Leader
+	rf.lastLogIndex = len(rf.log) - 1
+
+	for peer := range rf.peers {
+		if peer == rf.me {
+			continue
+		}
+		rf.nextIndex[peer] = rf.lastApplied + 1
+		rf.matchIndex[peer] = 0
+	}
+
+	rf.matchIndex[rf.me] = rf.lastApplied
+}
+
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
@@ -190,7 +205,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 
 	canVote := rf.votedFor == -1 || rf.votedFor == args.CandidateId // 防止 回复丢包
-	if canVote {
+	candidateUpToDate := args.LastLogTerm > rf.lastLogTerm || (args.LastLogTerm == rf.lastLogTerm && args.LastLogIndex >= rf.lastLogIndex)
+	if canVote && candidateUpToDate {
 		rf.votedFor = args.CandidateId
 		reply.VoteGranted = true
 		rf.resetElectionTimerLocked() // Optional?
@@ -284,16 +300,69 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 // term. the third return value is true if this server believes it is
 // the leader.
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	isLeader := true
+	// index := -1
+	// term := -1
+	// isLeader := true
+
+	// return index, term, isLeader
 
 	// Your code here (3B).
 
 	rf.mu.Lock()
-	defer rf.mu.Unlock()
+	if rf.role != Leader {
+		rf.mu.Unlock()
+		return -1, -1, false
+	}
+	index := len(rf.log)
+	rf.log = append(rf.log, LogEntry{Term: rf.currentTerm, Command: command})
+	rf.matchIndex[rf.me] = index
 
-	return index, term, isLeader
+	// commit index update
+	rf.commitIndex = index
+
+	args := AppendEntriesArgs{
+		Term:         rf.currentTerm,
+		LeaderId:     rf.me,
+		PrevLogIndex: index - 1,
+		PrevLogTerm:  rf.log[index-1].Term,
+		Entries:      []LogEntry{rf.log[index]},
+		LeaderCommit: rf.commitIndex,
+	}
+
+	rf.mu.Unlock()
+
+	// TODO: broadcast AppendEntries RPCs to followers
+	for peer := range rf.peers {
+		if peer == rf.me {
+			continue
+		}
+		go func(server int, request AppendEntriesArgs) {
+			var reply AppendEntriesReply
+			ok := rf.sendAppendEntries(server, &request, &reply)
+			if !ok {
+				return
+			}
+			rf.mu.Lock()
+			defer rf.mu.Unlock()
+
+			if reply.Term > rf.currentTerm {
+				rf.becomeFollowerLocked(reply.Term)
+				rf.resetElectionTimerLocked()
+				return
+			}
+
+			if reply.Success {
+				rf.matchIndex[server] = index
+				rf.nextIndex[server] = index + 1
+			} else {
+				rf.nextIndex[server] = reply.ConflictIndex
+			}
+
+		}(peer, args)
+
+	}
+
+	return index, rf.currentTerm, true
 }
 
 func (rf *Raft) ticker() {
@@ -334,8 +403,8 @@ func (rf *Raft) startElection() {
 	args := RequestVoteArgs{
 		Term:         electionTerm,
 		CandidateId:  rf.me,
-		LastLogIndex: 0,
-		LastLogTerm:  0,
+		LastLogIndex: rf.lastLogIndex,
+		LastLogTerm:  rf.lastLogTerm,
 	}
 
 	if votes >= majority {
@@ -394,36 +463,83 @@ func (rf *Raft) heartbeatTicker() { // the leader sends heartbeats no more than 
 
 }
 
+func (rf *Raft) applier() {
+	for {
+		if rf.lastApplied >= rf.commitIndex {
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		rf.mu.Lock()
+		next := rf.lastApplied + 1
+		entryCommand := rf.log[next].Command
+		rf.lastApplied = next
+		rf.mu.Unlock()
+		rf.applyCh <- raftapi.ApplyMsg{
+			CommandValid: true,
+			Command:      entryCommand,
+			CommandIndex: next,
+		}
+	}
+
+}
+
 func (rf *Raft) broadcastHeartbeats() {
 	rf.mu.Lock()
 	if rf.role != Leader {
 		rf.mu.Unlock()
 		return
 	}
-	args := AppendEntriesArgs{
-		Term:     rf.currentTerm,
-		LeaderId: rf.me,
+	// args := AppendEntriesArgs{
+	// 	Term:     rf.currentTerm,
+	// 	LeaderId: rf.me,
+	// }
+	args := make([]AppendEntriesArgs, len(rf.peers))
+	for peer := range rf.peers {
+		if peer == rf.me {
+			continue
+		}
+		next := rf.nextIndex[peer]
+		args[peer] = AppendEntriesArgs{
+			Term:         rf.currentTerm,
+			LeaderId:     rf.me,
+			PrevLogIndex: next - 1,
+			PrevLogTerm:  rf.log[next-1].Term,
+			// Entries:      rf.log[next:], // unsafe，会共用底层数组
+			Entries:      append([]LogEntry(nil), rf.log[next:]...), // 用于复制切片，避免修改副本时影响
+			LeaderCommit: rf.commitIndex,
+		}
 	}
+
 	rf.mu.Unlock()
 
 	for peer := range rf.peers {
 		if peer == rf.me {
 			continue
 		}
-		go func(server int, request AppendEntriesArgs) {
+		go func(server int, requests []AppendEntriesArgs) {
 			var reply AppendEntriesReply
 
-			ok := rf.sendAppendEntries(server, &request, &reply)
+			ok := rf.sendAppendEntries(server, &requests[server], &reply)
 			if !ok {
 				return
 			}
 			rf.mu.Lock()
 			defer rf.mu.Unlock()
 
+			if rf.role != Leader || rf.currentTerm != requests[server].Term {
+				return
+			}
 			if reply.Term > rf.currentTerm {
 				rf.becomeFollowerLocked(reply.Term)
 				rf.resetElectionTimerLocked()
+				return
 			}
+
+			// TODO:
+			if reply.Success {
+
+			}
+
 		}(peer, args)
 	}
 }
