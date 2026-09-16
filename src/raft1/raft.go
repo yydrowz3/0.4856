@@ -176,7 +176,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if canVote && candidateUpToDate {
 		rf.votedFor = args.CandidateId
 		reply.VoteGranted = true
-		rf.resetElectionTimerLocked() // Optional?
+		rf.resetElectionTimerLocked() // 投完票需要等待，防止 reply 没收到重试
 	}
 	reply.Term = rf.currentTerm
 }
@@ -221,13 +221,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.resetElectionTimerLocked()
 	reply.Term = rf.currentTerm // 成为了 follower 后，任期更新，回复的任期也要更新
 
-	if args.PrevLogIndex >= len(rf.log) { // follower log 太短
+	if args.PrevLogIndex >= len(rf.log) { // follower log 太短，导致 log.[args.PrefLobIndex] 越界
 		reply.ConflictIndex = len(rf.log) // 从 哪一条开始 conflict
 		reply.ConflictLen = len(rf.log)
 		return
 	}
 
-	if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
+	// 如果 不越界，开始从这个 index 的地方修改 follower 的日志，不管 follower 是否有多余的
+	if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm { // 找到 follower 中 冲突 Term 的第一个
 		conflictTerm := rf.log[args.PrevLogIndex].Term
 		first := args.PrevLogIndex
 		for first > 0 && rf.log[first-1].Term == conflictTerm {
@@ -248,7 +249,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			break
 		}
 		if rf.log[localIndex].Term != args.Entries[i].Term { // 发现任期不匹配
-			rf.log = rf.log[:localIndex]
+			rf.log = rf.log[:localIndex] // 截短
 			break
 		}
 
@@ -256,15 +257,16 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 	// 追加
 	if i < len(args.Entries) {
-		rf.log = append(rf.log, args.Entries[i:]...) // TODO: 为什么会从 i 开始?
+		rf.log = append(rf.log, args.Entries[i:]...)
 	}
 
 	if args.LeaderCommit > rf.commitIndex {
 		matchedThrough := args.PrevLogIndex + len(args.Entries)
-		newCommit := args.LeaderCommit
-		if newCommit > matchedThrough {
-			newCommit = matchedThrough
-		}
+		// newCommit := args.LeaderCommit
+		// if newCommit > matchedThrough {
+		// 	newCommit = matchedThrough
+		// }
+		newCommit := min(args.LeaderCommit, matchedThrough)
 		if newCommit > rf.commitIndex {
 			rf.commitIndex = newCommit
 			rf.applyCond.Broadcast()
@@ -434,6 +436,7 @@ func (rf *Raft) startElection() {
 			}
 
 			rf.mu.Unlock()
+
 			if becameLeader {
 				rf.broadcastHeartbeats()
 			}
@@ -481,7 +484,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.readPersist(persister.ReadRaftState())
 
 	for peer := range peers {
-		rf.nextIndex[peer] = len(rf.log)
+		rf.nextIndex[peer] = len(rf.log) // 自己的日志中，该 peer 的下一个日志的索引
 		rf.matchIndex[peer] = 0
 	}
 

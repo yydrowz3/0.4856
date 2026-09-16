@@ -43,7 +43,7 @@ func (rf *Raft) becomeLeaderLocked() {
 func (rf *Raft) heartbeatTicker() { // the leader sends heartbeats no more than 10 times per second
 	for {
 		time.Sleep(heartbeatInterval)
-		rf.broadcastHeartbeats()
+		rf.broadcastHeartbeats() // 内部确认状态，这是一种常见写法，优点时状态切换简单
 	}
 
 }
@@ -146,11 +146,11 @@ func (rf *Raft) replicateToPeer(peer int, leaderTerm int) {
 			return
 		}
 
-		sentNext := args.PrevLogIndex + 1
+		sentNext := args.PrevLogIndex + 1 // rf.nextIndex[peer] 可能已经被其他线程修改了，所以需要保存一个副本
 
 		if reply.Success {
 			matched := args.PrevLogIndex + len(args.Entries)
-			if matched > rf.matchIndex[peer] {
+			if matched > rf.matchIndex[peer] { // 等于是空心跳，小于是旧回复
 				rf.matchIndex[peer] = matched
 			}
 			if matched+1 > rf.nextIndex[peer] {
@@ -167,14 +167,17 @@ func (rf *Raft) replicateToPeer(peer int, leaderTerm int) {
 			return
 		}
 
-		if rf.nextIndex[peer] != sentNext { // 说明是旧值
+		// reply not Success
+		if rf.nextIndex[peer] != sentNext { // 说明是旧值，已经被处理
 			rf.mu.Unlock()
 			return
 		}
+
 		newNext := reply.ConflictIndex
+		// 相同索引但任期不同
 		if reply.ConflictTerm != -1 {
 			lastIndexWithTerm := -1
-			for index := len(rf.log) - 1; index >= 1; index-- {
+			for index := len(rf.log) - 1; index >= 1; index-- { // 可以优化，因为任期是递增的，不用无限找下去
 				if rf.log[index].Term == reply.ConflictTerm {
 					lastIndexWithTerm = index
 					break
@@ -184,15 +187,29 @@ func (rf *Raft) replicateToPeer(peer int, leaderTerm int) {
 				newNext = lastIndexWithTerm + 1
 			}
 		}
+		/*
+			Leader:   [0, 1, 1, 2, 2, 3]
+			Follower: [0, 1, 1, 4, 4]
+															↑ 冲突
+			这种情况 Follower 的任期 4 会被覆盖，因为 Leader 没找到 任期 4 的
 
-		if newNext < 1 {
-			newNext = 1
-		}
+			Leader:   [0, 1, 1, 4, 4, 5]
+			Follower: [0, 1, 1, 4, 4]
+															↑ 冲突
+			还是从 5 开始
 
-		if newNext >= sentNext {
-			rf.mu.Unlock()
-			return
-		}
+			Leader 如果有没有 commit 的部分，但是 退化成了 follower，那么不一致的地方会被删除
+		*/
+
+		// follower 日志太短
+
+		// if newNext < 1 { // 应该不会发生
+		// 	newNext = 1
+		// }
+		// if newNext >= sentNext { // 应该不会发生，因为不可能回复一个大于的值
+		// 	rf.mu.Unlock()
+		// 	return
+		// }
 
 		rf.nextIndex[peer] = newNext
 		rf.mu.Unlock()
@@ -205,9 +222,10 @@ func (rf *Raft) advanceCommitLocked() {
 	}
 	majority := len(rf.peers)/2 + 1
 
-	for index := len(rf.log) - 1; index > rf.commitIndex; index-- {
-		if rf.log[index].Term != rf.currentTerm { // TODO: 怎么理解？
-			continue
+	// commit 可能会大量落后，这是因为 复制不到多数节点
+	for index := len(rf.log) - 1; index > rf.commitIndex; index-- { // 一次确定较多的 index，可以快速推进
+		if rf.log[index].Term != rf.currentTerm { // 实现 raft 的一个 安全策略
+			continue // 就任期的日志不能在新任期中提交，但是可以通过新任期的新提交来被间接提交，防止可能会被覆盖的旧日志
 		}
 		count := 1
 		for peer := range rf.peers {
