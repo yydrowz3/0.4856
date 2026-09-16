@@ -26,7 +26,7 @@ Implement Raft leader election and heartbeats (AppendEntries RPCs with no log en
 make RUN="-run 3A" raft1
 ```
 
-- [ ] Part 3B: log (hard)
+- [x] Part 3B: log (hard)
 
 Implement the leader and follower code to append new log entries, so that make RUN="-run 3B" raft1 passes all tests. 
 

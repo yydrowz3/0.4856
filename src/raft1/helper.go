@@ -68,21 +68,43 @@ func (rf *Raft) applier() {
 
 func (rf *Raft) broadcastHeartbeats() {
 	rf.mu.Lock()
+
 	if rf.role != Leader {
 		rf.mu.Unlock()
 		return
 	}
 
 	leaderTerm := rf.currentTerm
-	rf.mu.Unlock()
+	targets := make([]int, 0, len(rf.peers)-1)
 
 	for peer := range rf.peers {
 		if peer == rf.me {
 			continue
 		}
 
-		go rf.replicateToPeer(peer, leaderTerm)
+		if rf.replicating[peer] {
+			continue
+		}
+
+		rf.replicating[peer] = true
+		targets = append(targets, peer)
 	}
+
+	rf.mu.Unlock()
+
+	for _, peer := range targets {
+		go rf.replicationWorker(peer, leaderTerm)
+	}
+}
+
+func (rf *Raft) replicationWorker(peer int, leaderTerm int) {
+	defer func() {
+		rf.mu.Lock()
+		rf.replicating[peer] = false
+		rf.mu.Unlock()
+	}()
+
+	rf.replicateToPeer(peer, leaderTerm)
 }
 
 func (rf *Raft) replicateToPeer(peer int, leaderTerm int) {
@@ -137,7 +159,7 @@ func (rf *Raft) replicateToPeer(peer int, leaderTerm int) {
 
 			rf.advanceCommitLocked()
 
-			stillBehind := rf.nextIndex[peer] < len(rf.log)
+			stillBehind := rf.nextIndex[peer] < len(rf.log) // 当前的复制任务会检查是否原始数据已经变化，所以不用启动新的 replication
 			rf.mu.Unlock()
 			if stillBehind {
 				continue

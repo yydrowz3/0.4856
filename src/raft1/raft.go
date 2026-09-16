@@ -347,7 +347,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	rf.mu.Unlock()
 
-	go rf.broadcastHeartbeats()
+	rf.broadcastHeartbeats()
 
 	return index, term, true
 }
@@ -475,6 +475,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.applyCh = applyCh
 	rf.applyCond = sync.NewCond(&rf.mu)
 
+	rf.replicating = make([]bool, len(peers))
+
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
@@ -487,8 +489,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go rf.ticker()
 	go rf.heartbeatTicker()
 	go rf.applier()
-
-	rf.replicating = make([]bool, len(peers))
 
 	return rf
 }
