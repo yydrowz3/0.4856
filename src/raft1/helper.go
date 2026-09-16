@@ -2,6 +2,8 @@ package raft
 
 import (
 	"time"
+
+	"6.5840/raftapi"
 )
 
 func (rf *Raft) resetElectionTimerLocked() {
@@ -48,22 +50,20 @@ func (rf *Raft) heartbeatTicker() { // the leader sends heartbeats no more than 
 
 func (rf *Raft) applier() {
 	for {
-		// if rf.lastApplied >= rf.commitIndex {
-		// 	time.Sleep(10 * time.Millisecond)
-		// 	continue
-		// }
-		// rf.mu.Lock()
-		// next := rf.lastApplied + 1
-		// entryCommand := rf.log[next].Command
-		// rf.lastApplied = next
-		// rf.mu.Unlock()
-		// rf.applyCh <- raftapi.ApplyMsg{
-		// 	CommandValid: true,
-		// 	Command:      entryCommand,
-		// 	CommandIndex: next,
-		// }
+		rf.mu.Lock()
+		for rf.lastApplied >= rf.commitIndex { // 不能使用 if，防止虚假唤醒, 正常情况下不会 大于
+			rf.applyCond.Wait() // 暂时释放 mu
+		}
+		index := rf.lastApplied + 1
+		command := rf.log[index].Command
+		rf.lastApplied = index
+		rf.mu.Unlock()
+		rf.applyCh <- raftapi.ApplyMsg{
+			CommandValid: true,
+			Command:      command,
+			CommandIndex: index,
+		}
 	}
-
 }
 
 func (rf *Raft) broadcastHeartbeats() {
@@ -72,69 +72,108 @@ func (rf *Raft) broadcastHeartbeats() {
 		rf.mu.Unlock()
 		return
 	}
-	// args := AppendEntriesArgs{
-	// 	Term:     rf.currentTerm,
-	// 	LeaderId: rf.me,
-	// }
-	args := make([]AppendEntriesArgs, len(rf.peers))
-	for peer := range rf.peers {
-		if peer == rf.me {
-			continue
-		}
-		next := rf.nextIndex[peer]
-		args[peer] = AppendEntriesArgs{
-			Term:         rf.currentTerm,
-			LeaderId:     rf.me,
-			PrevLogIndex: next - 1,
-			PrevLogTerm:  rf.log[next-1].Term,
-			// Entries:      rf.log[next:], // unsafe，会共用底层数组
-			Entries:      append([]LogEntry(nil), rf.log[next:]...), // 用于复制切片，避免修改副本时影响
-			LeaderCommit: rf.commitIndex,
-		}
-	}
 
+	leaderTerm := rf.currentTerm
 	rf.mu.Unlock()
 
 	for peer := range rf.peers {
 		if peer == rf.me {
 			continue
 		}
-		go func(server int, request AppendEntriesArgs) {
-			var reply AppendEntriesReply
 
-			ok := rf.sendAppendEntries(server, &request, &reply)
-			if !ok {
-				return
-			}
-			rf.mu.Lock()
+		go rf.replicateToPeer(peer, leaderTerm)
+	}
+}
 
-			if reply.Term > rf.currentTerm {
-				rf.becomeFollowerLocked(reply.Term)
-				rf.resetElectionTimerLocked()
-				rf.mu.Unlock()
-				return
+func (rf *Raft) replicateToPeer(peer int, leaderTerm int) {
+	for {
+		rf.mu.Lock()
+
+		if rf.role != Leader || rf.currentTerm != leaderTerm {
+			rf.mu.Unlock()
+			return
+		}
+
+		next := rf.nextIndex[peer]
+		args := AppendEntriesArgs{
+			Term:         rf.currentTerm,
+			LeaderId:     rf.me,
+			PrevLogIndex: next - 1,
+			PrevLogTerm:  rf.log[next-1].Term,
+			Entries:      append([]LogEntry(nil), rf.log[next:]...),
+			LeaderCommit: rf.commitIndex,
+		}
+
+		rf.mu.Unlock()
+
+		var reply AppendEntriesReply
+		ok := rf.sendAppendEntries(peer, &args, &reply)
+		if !ok { // 网络问题，不要死循环，等待下一次heartbeat
+			return
+		}
+
+		rf.mu.Lock()
+		if reply.Term > rf.currentTerm {
+			rf.becomeFollowerLocked(reply.Term)
+			rf.resetElectionTimerLocked()
+			rf.mu.Unlock()
+			return
+		}
+		if rf.role != Leader || rf.currentTerm != args.Term {
+			rf.mu.Unlock()
+			return
+		}
+
+		sentNext := args.PrevLogIndex + 1
+
+		if reply.Success {
+			matched := args.PrevLogIndex + len(args.Entries)
+			if matched > rf.matchIndex[peer] {
+				rf.matchIndex[peer] = matched
 			}
-			if rf.role != Leader || rf.currentTerm != request.Term {
-				rf.mu.Unlock()
-				return
+			if matched+1 > rf.nextIndex[peer] {
+				rf.nextIndex[peer] = matched + 1
 			}
 
-			if reply.Success {
-				matched := request.PrevLogIndex + len(request.Entries)
-				if matched > rf.matchIndex[server] {
-					rf.matchIndex[server] = matched
+			rf.advanceCommitLocked()
+
+			stillBehind := rf.nextIndex[peer] < len(rf.log)
+			rf.mu.Unlock()
+			if stillBehind {
+				continue
+			}
+			return
+		}
+
+		if rf.nextIndex[peer] != sentNext { // 说明是旧值
+			rf.mu.Unlock()
+			return
+		}
+		newNext := reply.ConflictIndex
+		if reply.ConflictTerm != -1 {
+			lastIndexWithTerm := -1
+			for index := len(rf.log) - 1; index >= 1; index-- {
+				if rf.log[index].Term == reply.ConflictTerm {
+					lastIndexWithTerm = index
+					break
 				}
-				if matched+1 > rf.nextIndex[server] {
-					rf.nextIndex[server] = matched + 1
-				}
-				rf.advanceCommitLocked()
-				rf.mu.Unlock()
-				return
 			}
+			if lastIndexWithTerm != -1 {
+				newNext = lastIndexWithTerm + 1
+			}
+		}
 
-			sentNext := request.PrevLogIndex + 1
+		if newNext < 1 {
+			newNext = 1
+		}
 
-		}(peer, args[peer])
+		if newNext >= sentNext {
+			rf.mu.Unlock()
+			return
+		}
+
+		rf.nextIndex[peer] = newNext
+		rf.mu.Unlock()
 	}
 }
 

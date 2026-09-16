@@ -59,6 +59,8 @@ type Raft struct {
 
 	applyCh   chan raftapi.ApplyMsg
 	applyCond *sync.Cond
+
+	replicating []bool
 }
 
 // return currentTerm and whether this server
@@ -485,6 +487,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go rf.ticker()
 	go rf.heartbeatTicker()
 	go rf.applier()
+
+	rf.replicating = make([]bool, len(peers))
 
 	return rf
 }
