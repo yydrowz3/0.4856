@@ -110,11 +110,14 @@ func (rf *Raft) persist() {
 	if err := e.Encode(rf.votedFor); err != nil {
 		panic(err)
 	}
+	if err := e.Encode(rf.lastIncludedIndex); err != nil {
+		panic(err)
+	}
 	if err := e.Encode(rf.log); err != nil {
 		panic(err)
 	}
 	raftstate := w.Bytes()
-	rf.persister.Save(raftstate, nil)
+	rf.persister.Save(raftstate, rf.snapshot)
 }
 
 // restore previously persisted state.
@@ -143,9 +146,10 @@ func (rf *Raft) readPersist(data []byte) {
 
 	var currentTerm int
 	var votedFor int
+	var lastIncludedIndex int
 	var logEntries []LogEntry
 
-	if d.Decode(&currentTerm) != nil || d.Decode(&votedFor) != nil || d.Decode(&logEntries) != nil {
+	if d.Decode(&currentTerm) != nil || d.Decode(&votedFor) != nil || d.Decode(&lastIncludedIndex) != nil || d.Decode(&logEntries) != nil {
 		return
 	}
 
@@ -155,6 +159,7 @@ func (rf *Raft) readPersist(data []byte) {
 
 	rf.currentTerm = currentTerm
 	rf.votedFor = votedFor
+	rf.lastIncludedIndex = lastIncludedIndex
 	rf.log = logEntries
 }
 
@@ -171,7 +176,39 @@ func (rf *Raft) PersistBytes() int {
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (3D).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
+	if index <= rf.lastIncludedIndex {
+		return
+	}
+
+	if index > rf.lastApplied || index > rf.lastLogIndexLocked() {
+		return
+	}
+
+	snapshotTerm := rf.termAtLocked(index)
+	oldOffset := rf.logOffsetLocked(index)
+
+	newLog := make([]LogEntry, len(rf.log)-oldOffset)
+	newLog[0] = LogEntry{Term: snapshotTerm}
+
+	copy(newLog[1:], rf.log[oldOffset+1:])
+
+	rf.log = newLog
+	rf.lastIncludedIndex = index
+	rf.snapshot = append([]byte(nil), snapshot...)
+
+	rf.persist()
+	/*
+		原全局日志：0 ... 9 10 11 12
+		Snapshot(10)
+
+		新日志：
+		log[0] = index 10 的 dummy
+		log[1] = index 11
+		log[2] = index 12
+	*/
 }
 
 // example RequestVote RPC arguments structure.
@@ -252,11 +289,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
+	lastIndex := rf.lastLogIndexLocked()
+
 	reply.Success = false
 	reply.Term = rf.currentTerm
 	reply.ConflictTerm = -1
-	reply.ConflictIndex = len(rf.log)
-	reply.ConflictLen = len(rf.log)
+	reply.ConflictIndex = lastIndex + 1
+	reply.ConflictLen = lastIndex + 1
 
 	// 旧任期
 	if args.Term < rf.currentTerm {
@@ -267,36 +306,70 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.resetElectionTimerLocked()
 	reply.Term = rf.currentTerm // 成为了 follower 后，任期更新，回复的任期也要更新
 
-	if args.PrevLogIndex >= len(rf.log) { // follower log 太短，导致 log.[args.PrefLobIndex] 越界
-		reply.ConflictIndex = len(rf.log) // 从 哪一条开始 conflict
-		reply.ConflictLen = len(rf.log)
+	// if args.PrevLogIndex >= len(rf.log) { // follower log 太短，导致 log.[args.PrefLobIndex] 越界
+	// 	reply.ConflictIndex = len(rf.log) // 从 哪一条开始 conflict
+	// 	reply.ConflictLen = len(rf.log)
+	// 	return
+	// }
+
+	if args.PrevLogIndex < rf.lastIncludedIndex {
+		// 以及被截断了
+		reply.ConflictIndex = rf.lastIncludedIndex + 1
 		return
 	}
 
-	logChanged := false
+	if args.PrevLogIndex > rf.lastLogIndexLocked() {
+		reply.ConflictIndex = rf.lastLogIndexLocked() + 1
+		return
+	}
+
 	// 如果 不越界，开始从这个 index 的地方修改 follower 的日志，不管 follower 是否有多余的
-	if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm { // 找到 follower 中 冲突 Term 的第一个
-		conflictTerm := rf.log[args.PrevLogIndex].Term
+	if rf.termAtLocked(args.PrevLogIndex) != args.PrevLogTerm { // 找到 follower 中 冲突 Term 的第一个
+		conflictTerm := rf.termAtLocked(args.PrevLogIndex)
 		first := args.PrevLogIndex
-		for first > 0 && rf.log[first-1].Term == conflictTerm {
+		for first > rf.lastIncludedIndex && rf.termAtLocked(first-1) == conflictTerm {
 			first--
 		}
 		reply.ConflictTerm = conflictTerm
 		reply.ConflictIndex = first
-		reply.ConflictLen = len(rf.log)
+
 		return
 	}
 
+	// 如果 不越界，开始从这个 index 的地方修改 follower 的日志，不管 follower 是否有多余的
+	// if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm { // 找到 follower 中 冲突 Term 的第一个
+	// 	conflictTerm := rf.log[args.PrevLogIndex].Term
+	// 	first := args.PrevLogIndex
+	// 	for first > 0 && rf.log[first-1].Term == conflictTerm {
+	// 		first--
+	// 	}
+	// 	reply.ConflictTerm = conflictTerm
+	// 	reply.ConflictIndex = first
+	// 	reply.ConflictLen = len(rf.log)
+	// 	return
+	// }
+
 	// 修改 现有 不匹配部分
-	insertAt := args.PrevLogIndex + 1
+	insertIndex := args.PrevLogIndex + 1
 	i := 0
+	logChanged := false
 	for i < len(args.Entries) {
-		localIndex := insertAt + i
-		if localIndex >= len(rf.log) {
+		globalIndex := insertIndex + i
+		if globalIndex > rf.lastLogIndexLocked() {
 			break
 		}
-		if rf.log[localIndex].Term != args.Entries[i].Term { // 发现任期不匹配
-			rf.log = rf.log[:localIndex] // 截短
+		// if localIndex >= len(rf.log) {
+		// 	break
+		// }
+		// if rf.log[localIndex].Term != args.Entries[i].Term { // 发现任期不匹配
+		// 	rf.log = rf.log[:localIndex] // 截短
+		// 	logChanged = true
+		// 	break
+		// }
+		if rf.termAtLocked(globalIndex) != args.Entries[i].Term { // 发现任期不匹配
+			offset := rf.logOffsetLocked(globalIndex)
+			newLog := append([]LogEntry(nil), rf.log[:offset]...)
+			rf.log = newLog
 			logChanged = true
 			break
 		}
@@ -310,8 +383,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	if args.LeaderCommit > rf.commitIndex {
-		matchedThrough := args.PrevLogIndex + len(args.Entries)
-		newCommit := min(args.LeaderCommit, matchedThrough)
+		// matchedThrough := args.PrevLogIndex + len(args.Entries)
+		newCommit := min(args.LeaderCommit, rf.lastLogIndexLocked())
 		if newCommit > rf.commitIndex {
 			rf.commitIndex = newCommit
 			rf.applyCond.Broadcast()
@@ -535,7 +608,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.resetElectionTimerLocked()
 	// rf.electionTimeout = time.Duration(150+rand.Intn(150)) * time.Millisecond
 
+	rf.lastIncludedIndex = 0
 	rf.log = []LogEntry{{Term: 0}}
+	rf.snapshot = nil
 	rf.commitIndex = 0
 	rf.lastApplied = 0
 
@@ -549,10 +624,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
+	rf.snapshot = persister.ReadSnapshot()
+	rf.commitIndex = rf.lastIncludedIndex
+	rf.lastApplied = rf.lastIncludedIndex
 
 	for peer := range peers {
-		rf.nextIndex[peer] = len(rf.log) // 自己的日志中，该 peer 的下一个日志的索引
-		rf.matchIndex[peer] = 0
+		rf.nextIndex[peer] = rf.lastLogIndexLocked() + 1 // 自己的日志中，该 peer 的下一个日志的索引
+		rf.matchIndex[peer] = rf.lastIncludedIndex
 	}
 
 	// start ticker goroutine to start elections
