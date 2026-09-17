@@ -62,7 +62,7 @@ type Raft struct {
 	applyCh   chan raftapi.ApplyMsg
 	applyCond *sync.Cond
 
-	replicating []bool
+	// replicating []bool
 }
 
 // return currentTerm and whether this server
@@ -526,7 +526,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.applyCh = applyCh
 	rf.applyCond = sync.NewCond(&rf.mu)
 
-	rf.replicating = make([]bool, len(peers))
+	// rf.replicating = make([]bool, len(peers))
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
