@@ -109,12 +109,57 @@ func (rf *Raft) replicateToPeer(peer int, leaderTerm int) {
 		}
 
 		next := rf.nextIndex[peer]
+
+		if next <= rf.lastIncludedIndex {
+			args := InstallSnapshotArgs{
+				Term:              rf.currentTerm,
+				LeaderId:          rf.me,
+				LastIncludedIndex: rf.lastIncludedIndex,
+				LastIncludedTerm:  rf.log[0].Term, // 这是一个 dummy
+				Data:              append([]byte(nil), rf.snapshot...),
+			}
+			rf.mu.Unlock()
+
+			var reply InstallSnapshotReply
+			ok := rf.sendInstallSnapshot(peer, &args, &reply)
+			if !ok {
+				return
+			}
+
+			rf.mu.Lock()
+
+			if reply.Term > rf.currentTerm {
+				rf.becomeFollowerLocked(reply.Term)
+				rf.resetElectionTimerLocked()
+				rf.mu.Unlock()
+				return
+			}
+
+			if rf.role != Leader || rf.currentTerm != args.Term {
+				rf.mu.Unlock()
+				return
+			}
+
+			if rf.matchIndex[peer] < args.LastIncludedIndex {
+				rf.matchIndex[peer] = args.LastIncludedIndex
+			}
+			if rf.nextIndex[peer] < args.LastIncludedIndex+1 {
+				rf.nextIndex[peer] = args.LastIncludedIndex + 1
+			}
+
+			rf.mu.Unlock()
+
+			// 快照之后也要发送
+			continue
+		}
+
+		prevIndex := next - 1
 		args := AppendEntriesArgs{
 			Term:         rf.currentTerm,
 			LeaderId:     rf.me,
-			PrevLogIndex: next - 1,
-			PrevLogTerm:  rf.log[next-1].Term,
-			Entries:      append([]LogEntry(nil), rf.log[next:]...),
+			PrevLogIndex: prevIndex,
+			PrevLogTerm:  rf.termAtLocked(prevIndex),
+			Entries:      append([]LogEntry(nil), rf.log[rf.logOffsetLocked(next):]...),
 			LeaderCommit: rf.commitIndex,
 		}
 
@@ -170,8 +215,9 @@ func (rf *Raft) replicateToPeer(peer int, leaderTerm int) {
 		// 相同索引但任期不同
 		if reply.ConflictTerm != -1 {
 			lastIndexWithTerm := -1
-			for index := len(rf.log) - 1; index >= 1; index-- { // 可以优化，因为任期是递增的，不用无限找下去
-				if rf.log[index].Term == reply.ConflictTerm {
+			// for index := len(rf.log) - 1; index >= 1; index--
+			for index := rf.lastLogIndexLocked(); index >= rf.lastIncludedIndex; index-- { // 可以优化，因为任期是递增的，不用无限找下去
+				if rf.termAtLocked(index) == reply.ConflictTerm {
 					lastIndexWithTerm = index
 					break
 				}

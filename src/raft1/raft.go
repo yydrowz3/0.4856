@@ -410,6 +410,63 @@ type InstallSnapshotReply struct {
 	Term int
 }
 
+func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	reply.Term = rf.currentTerm
+	if args.Term < rf.currentTerm {
+		return
+	}
+
+	rf.becomeFollowerLocked(args.Term)
+	rf.resetElectionTimerLocked()
+	reply.Term = rf.currentTerm
+
+	if args.LastIncludedIndex <= rf.lastIncludedIndex {
+		return
+	}
+	if args.LastIncludedIndex <= rf.lastApplied {
+		return
+	}
+
+	var newLog []LogEntry
+
+	if rf.containsLogLocked(args.LastIncludedIndex) && rf.termAtLocked(args.LastIncludedIndex) == args.LastIncludedTerm {
+		offset := rf.logOffsetLocked(args.LastIncludedIndex)
+		suffix := rf.log[offset+1:]
+		newLog = make([]LogEntry, len(suffix)+1)
+		newLog[0] = LogEntry{Term: args.LastIncludedTerm}
+		copy(newLog[1:], suffix)
+	} else {
+		newLog = []LogEntry{{Term: args.LastIncludedTerm}}
+	}
+	rf.log = newLog
+	rf.lastIncludedIndex = args.LastIncludedIndex
+	rf.snapshot = append([]byte(nil), args.Data...)
+
+	if rf.commitIndex < args.LastIncludedIndex {
+		rf.commitIndex = args.LastIncludedIndex
+	}
+	if rf.lastApplied < args.LastIncludedIndex {
+		rf.lastApplied = args.LastIncludedIndex
+	}
+
+	msg := raftapi.ApplyMsg{
+		SnapshotValid: true,
+		Snapshot:      append([]byte(nil), args.Data...),
+		SnapshotTerm:  args.LastIncludedTerm,
+		SnapshotIndex: args.LastIncludedIndex,
+	}
+
+	if rf.pendingSnapshot != nil || rf.pendingSnapshot.SnapshotIndex < msg.SnapshotIndex {
+		rf.pendingSnapshot = &msg
+	}
+
+	rf.persist()
+	rf.applyCond.Broadcast()
+}
+
 // example code to send a RequestVote RPC to a server.
 // server is the index of the target server in rf.peers[].
 // expects RPC arguments in args.
@@ -445,6 +502,10 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	return ok
+}
+
+func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply *InstallSnapshotReply) bool {
+	return rf.peers[server].Call("Raft.InstallSnapshot", args, reply)
 }
 
 // the service using Raft (e.g. a k/v server) wants to start
