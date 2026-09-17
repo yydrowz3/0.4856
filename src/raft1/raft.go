@@ -459,7 +459,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		SnapshotIndex: args.LastIncludedIndex,
 	}
 
-	if rf.pendingSnapshot != nil || rf.pendingSnapshot.SnapshotIndex < msg.SnapshotIndex {
+	if rf.pendingSnapshot == nil || rf.pendingSnapshot.SnapshotIndex < msg.SnapshotIndex {
 		rf.pendingSnapshot = &msg
 	}
 

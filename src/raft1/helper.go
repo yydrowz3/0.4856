@@ -43,10 +43,27 @@ func (rf *Raft) heartbeatTicker() { // the leader sends heartbeats no more than 
 func (rf *Raft) applier() {
 	for {
 		rf.mu.Lock()
-		for rf.lastApplied >= rf.commitIndex { // 不能使用 if，防止虚假唤醒, 正常情况下不会 大于
+		for rf.pendingSnapshot == nil && rf.lastApplied >= rf.commitIndex { // 不能使用 if，防止虚假唤醒, 正常情况下不会 大于
 			rf.applyCond.Wait() // 暂时释放 mu
 		}
+		if rf.pendingSnapshot != nil {
+			msg := *rf.pendingSnapshot
+			rf.pendingSnapshot = nil
+			rf.mu.Unlock()
+
+			rf.applyCh <- msg
+			continue
+		}
+
 		index := rf.lastApplied + 1
+
+		// 正常情况下不会发生，只是保护日志访问。
+		if index <= rf.lastIncludedIndex {
+			rf.lastApplied = rf.lastIncludedIndex
+			rf.mu.Unlock()
+			continue
+		}
+
 		command := rf.log[rf.logOffsetLocked(index)].Command
 		rf.lastApplied = index
 		rf.mu.Unlock()
