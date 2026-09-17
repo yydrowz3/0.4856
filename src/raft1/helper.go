@@ -23,6 +23,7 @@ func (rf *Raft) becomeFollowerLocked(term int) { // 同 任期 不能清空voted
 	if term > rf.currentTerm {
 		rf.currentTerm = term
 		rf.votedFor = -1
+		rf.persist()
 	}
 	rf.role = Follower
 }
@@ -82,18 +83,18 @@ func (rf *Raft) broadcastHeartbeats() {
 			continue
 		}
 
-		if rf.replicating[peer] {
-			continue
-		}
-
-		rf.replicating[peer] = true
+		// if rf.replicating[peer] {
+		// 	continue
+		// }
+		// rf.replicating[peer] = true
 		targets = append(targets, peer)
 	}
 
 	rf.mu.Unlock()
 
 	for _, peer := range targets {
-		go rf.replicationWorker(peer, leaderTerm)
+		// go rf.replicationWorker(peer, leaderTerm)
+		go rf.replicateToPeer(peer, leaderTerm)
 	}
 }
 
