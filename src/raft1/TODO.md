@@ -41,7 +41,7 @@ Implement the leader and follower code to append new log entries, so that make R
 make RUN="-run 3B" raft1
 ```
 
-- [ ] Part 3C: persistence (hard)
+- [x] Part 3C: persistence (hard)
 
 Complete the functions persist() and readPersist() in raft.go by adding code to save and restore persistent state. You will need to encode (or "serialize") the state as an array of bytes in order to pass it to the Persister. Use the labgob encoder; see the comments in persist() and readPersist(). labgob is like Go's gob encoder but prints error messages if you try to encode structures with lower-case field names. For now, pass nil as the second argument to persister.Save(). Insert calls to persist() at the points where your implementation changes persistent state. Once you've done this, and if the rest of your implementation is correct, you should pass all of the 3C tests. 
 
@@ -63,6 +63,9 @@ Implement Snapshot() and the InstallSnapshot RPC, as well as the changes to Raft
 > Raft must discard old log entries in a way that allows the Go garbage collector to free and re-use the memory; this requires that there be no reachable references (pointers) to the discarded log entries.
 > When a Raft peer is re-started, the persister passed to Make() will contain a snapshot of application state as well as Raft's saved state. Raft must include a non-nil snapshot with every call to persister.Save() (if the log has been trimmed), which means that it's a good idea for Make() to call persister.ReadSnapshot() and save the result.
 > A reasonable amount of time to consume for the full set of Lab 3 tests (3A+3B+3C+3D) without -race is 6 minutes of real time and one minute of CPU time. When running with -race, it is about 10 minutes of real time and two minutes of CPU time. 
+
+  - [ ] Index x + snapshot, snapshot() => discard before index, move index to X
+  - [ ] leader send InstallSnapshotRPC -> fail to bring a follower up to date, send entire snapshot in a single rpc
 
 ```
 make RUN="-run 3D" raft1
