@@ -63,6 +63,12 @@ type Raft struct {
 	applyCond *sync.Cond
 
 	// replicating []bool
+
+	lastIncludedIndex int
+	snapshot          []byte
+
+	// for Installing Snapshot
+	pendingSnapshot *raftapi.ApplyMsg
 }
 
 // return currentTerm and whether this server
@@ -319,6 +325,18 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.Success = true
 }
 
+type InstallSnapshotArgs struct {
+	Term              int
+	LeaderId          int
+	LastIncludedIndex int
+	LastIncludedTerm  int
+	Data              []byte
+}
+
+type InstallSnapshotReply struct {
+	Term int
+}
+
 // example code to send a RequestVote RPC to a server.
 // server is the index of the target server in rf.peers[].
 // expects RPC arguments in args.
@@ -384,7 +402,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		return -1, term, false
 	}
 
-	index := len(rf.log)
+	// index := len(rf.log)
+	index := rf.lastLogIndexLocked() + 1
 	rf.log = append(rf.log, LogEntry{Term: rf.currentTerm, Command: command})
 
 	rf.persist()

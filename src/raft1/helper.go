@@ -11,14 +11,6 @@ func (rf *Raft) resetElectionTimerLocked() {
 	rf.electionTimeout = randomElectionTimeout()
 }
 
-func (rf *Raft) lastLogIndexLocked() int {
-	return len(rf.log) - 1
-}
-
-func (rf *Raft) lastLogTermLocked() int {
-	return rf.log[len(rf.log)-1].Term
-}
-
 func (rf *Raft) becomeFollowerLocked(term int) { // 同 任期 不能清空voted，否则会再次投票
 	if term > rf.currentTerm {
 		rf.currentTerm = term
@@ -32,7 +24,6 @@ func (rf *Raft) becomeLeaderLocked() {
 	rf.role = Leader
 
 	lastIndex := rf.lastLogIndexLocked()
-
 	for peer := range rf.peers {
 		rf.nextIndex[peer] = lastIndex + 1
 		rf.matchIndex[peer] = 0 // 成为 Leader 后需要重新 确认 match
@@ -56,7 +47,7 @@ func (rf *Raft) applier() {
 			rf.applyCond.Wait() // 暂时释放 mu
 		}
 		index := rf.lastApplied + 1
-		command := rf.log[index].Command
+		command := rf.log[rf.logOffsetLocked(index)].Command
 		rf.lastApplied = index
 		rf.mu.Unlock()
 		rf.applyCh <- raftapi.ApplyMsg{
@@ -225,8 +216,11 @@ func (rf *Raft) advanceCommitLocked() {
 	majority := len(rf.peers)/2 + 1
 
 	// commit 可能会大量落后，这是因为 复制不到多数节点
-	for index := len(rf.log) - 1; index > rf.commitIndex; index-- { // 一次确定较多的 index，可以快速推进
-		if rf.log[index].Term != rf.currentTerm { // 实现 raft 的一个 安全策略
+
+	// for index := len(rf.log) - 1; index > rf.commitIndex; index--
+	for index := rf.lastLogIndexLocked(); index > rf.commitIndex; index-- { // 一次确定较多的 index，可以快速推进
+		// if rf.log[index].Term != rf.currentTerm
+		if rf.termAtLocked(index) != rf.currentTerm { // 实现 raft 的一个 安全策略
 			continue // 就任期的日志不能在新任期中提交，但是可以通过新任期的新提交来被间接提交，防止可能会被覆盖的旧日志
 		}
 		count := 1
@@ -244,4 +238,30 @@ func (rf *Raft) advanceCommitLocked() {
 			return
 		}
 	}
+}
+
+func (rf *Raft) firstLogIndexLocked() int {
+	return rf.lastIncludedIndex
+	// return rf.lastIncludedIndex + 1
+}
+
+func (rf *Raft) logOffsetLocked(globalIndex int) int {
+	return globalIndex - rf.lastIncludedIndex
+}
+
+func (rf *Raft) containsLogLocked(globalIndex int) bool {
+	return globalIndex >= rf.firstLogIndexLocked() && globalIndex <= rf.lastLogIndexLocked()
+}
+
+func (rf *Raft) lastLogIndexLocked() int {
+	// return len(rf.log) - 1
+	return rf.lastIncludedIndex + len(rf.log) - 1
+}
+
+func (rf *Raft) lastLogTermLocked() int {
+	return rf.log[len(rf.log)-1].Term
+}
+
+func (rf *Raft) termAtLocked(globalIndex int) int {
+	return rf.log[rf.logOffsetLocked(globalIndex)].Term
 }
