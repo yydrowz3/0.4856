@@ -109,7 +109,6 @@ func (rsm *RSM) reader() {
 				value: value,
 			}
 		}
-
 		rsm.mu.Unlock()
 	}
 }
@@ -117,15 +116,13 @@ func (rsm *RSM) reader() {
 // Submit a command to Raft, and wait for it to be committed.  It
 // should return ErrWrongLeader if client should find new leader and
 // try again.
-func (rsm *RSM) Submit(req any) (rpc.Err, any) {
-
+func (rsm *RSM) Submit(req any) (rpc.Err, any) { // 应该是 通过 goroutine 的方式 submit
 	// Submit creates an Op structure to run a command through Raft;
 	// for example: op := Op{Me: rsm.me, Id: id, Req: req}, where req
 	// is the argument to Submit and id is a unique id for the op.
 
 	// your code here
 	// return rpc.ErrWrongLeader, nil // i'm dead, try another server.
-
 	rsm.mu.Lock()
 	rsm.nextID++
 	op := Op{
@@ -163,7 +160,6 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 				return rpc.ErrWrongLeader, nil
 			}
 			return rpc.OK, result.value
-
 		case <-ticker.C:
 			currentTerm, _ := rsm.rf.GetState()
 			if currentTerm != startTerm {

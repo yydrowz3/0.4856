@@ -7,7 +7,7 @@ Puts/Gets -> linearizable history
 Providing linearizability is harder if the service is replicated, since all servers must choose the same execution order for concurrent requests, must avoid replying to clients using state that isn't up to date, and must recover their state after a failure in a way that preserves all acknowledged client updates. 
 
 
-- [ ] Part A: replicated state machine (RSM)
+- [x] Part A: replicated state machine (RSM)
 
 
 Implement rsm.go: the Submit() method and a reader goroutine. You have completed this task if you pass the rsm 4A tests: 
@@ -16,8 +16,8 @@ Implement rsm.go: the Submit() method and a reader goroutine. You have completed
 > You should not need to add any fields to the Raft ApplyMsg, or to Raft RPCs such as AppendEntries, but you are allowed to do so.
 > Your solution needs to handle an rsm leader that has called Start() for a request submitted with Submit() but loses its leadership before the request is committed to the log. One way to do this is for the rsm to detect that it has lost leadership, by noticing that Raft's term has changed or a different request has appeared at the index returned by Start(), and return rpc.ErrWrongLeader from Submit(). If the ex-leader is partitioned by itself, it won't know about new leaders; but any client in the same partition won't be able to talk to a new leader either, so it's OK in this case for the server to wait indefinitely until the partition heals. 
 
-  - [ ] Submit Method
-  - [ ] reader goroutine
+  - [x] Submit Method
+  - [x] reader goroutine
 
 ```
 make RUN="-run 4A" rsm1
