@@ -23,7 +23,7 @@ Implement rsm.go: the Submit() method and a reader goroutine. You have completed
 make RUN="-run 4A" rsm1
 ```
 
-- [ ] Part B: Key/value service without snapshots
+- [x] Part B: Key/value service without snapshots
 
 Your first task is to implement a solution that works when there are no dropped messages, and no failed servers.
 

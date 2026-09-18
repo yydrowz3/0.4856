@@ -1,7 +1,6 @@
 package kvraft
 
 import (
-	"log"
 	"time"
 
 	"6.5840/kvsrv1/rpc"
@@ -39,25 +38,29 @@ func (ck *Clerk) Leader() int {
 func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 	// You will have to modify this function.
 	args := rpc.GetArgs{Key: key}
-	reply := rpc.GetReply{Err: rpc.ErrMaybe}
+	attempts := 0
 
 	for {
+		server := ck.leader
+		var reply rpc.GetReply
 		ok := ck.clnt.Call(ck.servers[ck.leader], "KVServer.Get", &args, &reply)
-		if !ok {
-			log.Printf("Clerk.Get: Call failed for key %s, resend", key)
-		} else {
-			if reply.Err == rpc.OK {
+
+		if ok {
+			switch reply.Err {
+			case rpc.OK:
+				// ck.leader = server
 				return reply.Value, reply.Version, rpc.OK
-			}
-			if reply.Err == rpc.ErrNoKey {
+			case rpc.ErrNoKey:
+				// ck.leader = server
 				return "", 0, rpc.ErrNoKey
 			}
-			if reply.Err == rpc.ErrWrongLeader {
-				ck.leader = (ck.leader + 1) % len(ck.servers)
-			}
 		}
+		ck.leader = (server + 1) % len(ck.servers)
+		attempts++
 
-		time.Sleep(100 * time.Millisecond)
+		if attempts%len(ck.servers) == 0 {
+			time.Sleep(20 * time.Millisecond)
+		}
 	}
 }
 
@@ -81,41 +84,37 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 	// You will have to modify this function.
 	args := rpc.PutArgs{Key: key, Value: value, Version: version}
-	reply := rpc.PutReply{Err: rpc.ErrMaybe}
-
-	firstOk := ck.clnt.Call(ck.servers[ck.leader], "KVServer.Put", &args, &reply)
-	if firstOk {
-		// message not drop
-		if reply.Err == rpc.OK {
-			return rpc.OK
-		}
-		if reply.Err == rpc.ErrVersion {
-			return rpc.ErrVersion
-		}
-		if reply.Err == rpc.ErrNoKey {
-			return rpc.ErrNoKey
-		}
-	} else {
-		// message drop
-		log.Printf("Clerk.Put: First call trial failed for key %s, start resending", key)
-		for {
-			time.Sleep(100 * time.Millisecond)
-			ok := ck.clnt.Call(ck.servers[ck.leader], "KVServer.Put", &args, &reply)
-			if !ok {
-				log.Printf("Clerk.Put: Call failed for key %s, resend", key)
-			} else {
-				if reply.Err == rpc.OK {
-					return rpc.OK
-				}
-				if reply.Err == rpc.ErrVersion {
+	retried := false
+	attempts := 0
+	for {
+		server := ck.leader
+		var reply rpc.PutReply
+		ok := ck.clnt.Call(ck.servers[server], "KVServer.Put", &args, &reply)
+		if ok {
+			switch reply.Err {
+			case rpc.OK:
+				ck.leader = server
+				return rpc.OK
+			case rpc.ErrNoKey:
+				ck.leader = server
+				return rpc.ErrNoKey
+			case rpc.ErrVersion:
+				ck.leader = server
+				if retried {
 					return rpc.ErrMaybe
 				}
-				if reply.Err == rpc.ErrNoKey {
-					return rpc.ErrNoKey
-				}
+				return rpc.ErrVersion
+			case rpc.ErrWrongLeader:
+				// try next server
 			}
 		}
-	}
 
-	return rpc.ErrMaybe
+		retried = true
+		ck.leader = (server + 1) % len(ck.servers)
+		attempts++
+
+		if attempts%len(ck.servers) == 0 {
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
 }
