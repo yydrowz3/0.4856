@@ -2,21 +2,28 @@ package rsm
 
 import (
 	"sync"
+	"time"
 
 	"6.5840/kvsrv1/rpc"
 	"6.5840/labrpc"
-	"6.5840/raft1"
+	raft "6.5840/raft1"
 	"6.5840/raftapi"
-	"6.5840/tester1"
-
+	tester "6.5840/tester1"
 )
+
+type applyResult struct {
+	op    Op
+	value any
+}
 
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	Me  int
+	Id  int
+	Req any
 }
-
 
 // A server (i.e., ../server.go) that wants to replicate itself calls
 // MakeRSM and must implement the StateMachine interface.  This
@@ -38,6 +45,9 @@ type RSM struct {
 	maxraftstate int // snapshot if log grows this big
 	sm           StateMachine
 	// Your definitions here.
+	nextID  int
+	waiters map[int]chan applyResult
+	done    chan struct{}
 }
 
 // servers[] contains the ports of the set of
@@ -61,10 +71,15 @@ func MakeRSM(servers []*labrpc.ClientEnd, me int, persister *tester.Persister, m
 		maxraftstate: maxraftstate,
 		applyCh:      make(chan raftapi.ApplyMsg),
 		sm:           sm,
+		waiters:      make(map[int]chan applyResult),
+		done:         make(chan struct{}),
 	}
 	if !tester.UseRaftStateMachine {
 		rsm.rf = raft.Make(servers, me, persister, rsm.applyCh)
 	}
+
+	go rsm.reader()
+
 	return rsm
 }
 
@@ -72,6 +87,32 @@ func (rsm *RSM) Raft() raftapi.Raft {
 	return rsm.rf
 }
 
+func (rsm *RSM) reader() {
+	defer close(rsm.done)
+
+	for msg := range rsm.applyCh {
+		if !msg.CommandValid {
+			continue
+		}
+		op, ok := msg.Command.(Op)
+		if !ok {
+			continue
+		}
+
+		rsm.mu.Lock()
+		value := rsm.sm.DoOp(op.Req)
+
+		if ch, waiting := rsm.waiters[msg.CommandIndex]; waiting {
+			delete(rsm.waiters, msg.CommandIndex)
+			ch <- applyResult{
+				op:    op,
+				value: value,
+			}
+		}
+
+		rsm.mu.Unlock()
+	}
+}
 
 // Submit a command to Raft, and wait for it to be committed.  It
 // should return ErrWrongLeader if client should find new leader and
@@ -83,5 +124,61 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 	// is the argument to Submit and id is a unique id for the op.
 
 	// your code here
-	return rpc.ErrWrongLeader, nil // i'm dead, try another server.
+	// return rpc.ErrWrongLeader, nil // i'm dead, try another server.
+
+	rsm.mu.Lock()
+	rsm.nextID++
+	op := Op{
+		Me:  rsm.me,
+		Id:  rsm.nextID,
+		Req: req,
+	}
+
+	index, startTerm, isLeader := rsm.rf.Start(op)
+	if !isLeader {
+		rsm.mu.Unlock()
+		return rpc.ErrWrongLeader, nil
+	}
+
+	ch := make(chan applyResult, 1)
+	rsm.waiters[index] = ch
+	rsm.mu.Unlock()
+
+	cleanup := func() {
+		rsm.mu.Lock()
+		if current, ok := rsm.waiters[index]; ok && current == ch {
+			delete(rsm.waiters, index)
+		}
+		rsm.mu.Unlock()
+	}
+	defer cleanup()
+
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case result := <-ch:
+			if result.op.Me != op.Me || result.op.Id != op.Id {
+				return rpc.ErrWrongLeader, nil
+			}
+			return rpc.OK, result.value
+
+		case <-ticker.C:
+			currentTerm, _ := rsm.rf.GetState()
+			if currentTerm != startTerm {
+				select {
+				case result := <-ch:
+					if result.op.Me == op.Me && result.op.Id == op.Id {
+						return rpc.OK, result.value
+					}
+				default:
+				}
+				return rpc.ErrWrongLeader, nil
+			}
+		case <-rsm.done:
+			return rpc.ErrWrongLeader, nil
+		}
+	}
+
 }
