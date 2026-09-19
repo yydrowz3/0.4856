@@ -94,9 +94,6 @@ func (kv *KVServer) Snapshot() []byte {
 
 func (kv *KVServer) Restore(data []byte) {
 	// Your code here
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
-
 	if len(data) < 1 {
 		log.Printf("kvserver snapshot is empty")
 		return
@@ -104,16 +101,15 @@ func (kv *KVServer) Restore(data []byte) {
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
 	var kvSnapshot KVSnapshot
-	if d.Decode(&kvSnapshot) != nil {
-		log.Printf("kvserver snapshot decode failed")
-		return
+	if err := d.Decode(&kvSnapshot); err != nil {
+		panic(err)
 	}
-	// if len(kvSnapshot.Entries) == 0 { // 空 也应该是合法快照
-	// 	log.Printf("decoded kvserver snapshot is empty")
-	// 	return
-	// }
-
+	if kvSnapshot.Entries == nil {
+		kvSnapshot.Entries = make(map[string]Entry)
+	}
+	kv.mu.Lock()
 	kv.entries = kvSnapshot.Entries
+	kv.mu.Unlock()
 }
 
 func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {

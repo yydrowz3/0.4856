@@ -62,8 +62,8 @@ Implement the kvraft1/server.go Snapshot() and Restore() methods, which rsm call
   - [x] add rsm encode / decode function
   - [x] make rsm restore rsm -> restore sm (KVServer)
   - [x] installSnapshot helper function
-  - [ ] modify reader()
-  - [ ] modify Submit()
+  - [x] modify reader()
+  - [x] modify Submit()
 
 
 ```

@@ -103,13 +103,11 @@ func (rsm *RSM) reader() {
 	defer close(rsm.done)
 
 	for msg := range rsm.applyCh {
-		if !msg.CommandValid {
+		if msg.SnapshotValid {
+			rsm.installSnapshot(msg)
 			continue
 		}
-
-		rsm.mu.Lock()
-		if msg.CommandIndex <= rsm.lastApplied {
-			rsm.mu.Unlock()
+		if !msg.CommandValid {
 			continue
 		}
 
@@ -119,18 +117,22 @@ func (rsm *RSM) reader() {
 			continue
 		}
 
+		rsm.mu.Lock()
+
+		if msg.CommandIndex <= rsm.lastApplied {
+			rsm.mu.Unlock()
+			continue
+		}
+
 		value := rsm.sm.DoOp(op.Req)
 		rsm.lastApplied = msg.CommandIndex
 		needSnapshot := rsm.maxraftstate > 0 && rsm.rf.PersistBytes() >= rsm.maxraftstate
 		var snapshot []byte
 		if needSnapshot {
-			snapshot = snapshotData{
+			snapshot = encodeSnapshot(snapshotData{
 				LastApplied: rsm.lastApplied,
 				State:       rsm.sm.Snapshot(),
-			}
-		}
-
-		if needSnapshot {
+			})
 			rsm.rf.Snapshot(msg.CommandIndex, snapshot)
 		}
 
@@ -139,6 +141,7 @@ func (rsm *RSM) reader() {
 			ch <- applyResult{
 				op:    op,
 				value: value,
+				err:   rpc.OK,
 			}
 		}
 		rsm.mu.Unlock()
@@ -188,16 +191,21 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) { // 应该是 通过 goroutine �
 	for {
 		select {
 		case result := <-ch:
+			if result.err != rpc.OK {
+				return result.err, nil
+			}
+
 			if result.op.Me != op.Me || result.op.Id != op.Id {
 				return rpc.ErrWrongLeader, nil
 			}
+
 			return rpc.OK, result.value
 		case <-ticker.C:
 			currentTerm, _ := rsm.rf.GetState()
 			if currentTerm != startTerm {
 				select {
 				case result := <-ch:
-					if result.op.Me == op.Me && result.op.Id == op.Id {
+					if result.err == rpc.OK && result.op.Me == op.Me && result.op.Id == op.Id {
 						return rpc.OK, result.value
 					}
 				default:
@@ -208,5 +216,4 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) { // 应该是 通过 goroutine �
 			return rpc.ErrWrongLeader, nil
 		}
 	}
-
 }
