@@ -25,6 +25,11 @@ type Op struct {
 	Req any
 }
 
+type snapshotData struct {
+	LastApplied int
+	State       []byte
+}
+
 // A server (i.e., ../server.go) that wants to replicate itself calls
 // MakeRSM and must implement the StateMachine interface.  This
 // interface allows the rsm package to interact with the server for
@@ -48,6 +53,8 @@ type RSM struct {
 	nextID  int
 	waiters map[int]chan applyResult
 	done    chan struct{}
+
+	lastApplied int
 }
 
 // servers[] contains the ports of the set of
@@ -94,13 +101,33 @@ func (rsm *RSM) reader() {
 		if !msg.CommandValid {
 			continue
 		}
-		op, ok := msg.Command.(Op)
-		if !ok {
+
+		rsm.mu.Lock()
+		if msg.CommandIndex <= rsm.lastApplied {
+			rsm.mu.Unlock()
 			continue
 		}
 
-		rsm.mu.Lock()
+		op, ok := msg.Command.(Op)
+		if !ok {
+			rsm.mu.Unlock()
+			continue
+		}
+
 		value := rsm.sm.DoOp(op.Req)
+		rsm.lastApplied = msg.CommandIndex
+		needSnapshot := rsm.maxraftstate > 0 && rsm.rf.PersistBytes() >= rsm.maxraftstate
+		var snapshot []byte
+		if needSnapshot {
+			snapshot = snapshotData{
+				LastApplied: rsm.lastApplied,
+				State:       rsm.sm.Snapshot(),
+			}
+		}
+
+		if needSnapshot {
+			rsm.rf.Snapshot(msg.CommandIndex, snapshot)
+		}
 
 		if ch, waiting := rsm.waiters[msg.CommandIndex]; waiting {
 			delete(rsm.waiters, msg.CommandIndex)
@@ -172,7 +199,7 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) { // 应该是 通过 goroutine �
 				}
 				return rpc.ErrWrongLeader, nil
 			}
-		case <-rsm.done:
+		case <-rsm.done: // 如果 close()，这个会立即返回，不会阻塞
 			return rpc.ErrWrongLeader, nil
 		}
 	}

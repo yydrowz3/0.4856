@@ -57,6 +57,8 @@ Implement the kvraft1/server.go Snapshot() and Restore() methods, which rsm call
 > You may have bugs in your Raft and rsm library that this task exposes. If you make changes to your Raft implementation make sure it continues to pass all of the Lab 3 tests.
 > A reasonable amount of time to take for the Lab 4 tests is 400 seconds of real time and 700 seconds of CPU time. 
 
+  - [x] KVServer Snapshot & Restore
+
 ```
 make RUN="-run 4C" kvraft1
 ```

@@ -1,6 +1,8 @@
 package kvraft
 
 import (
+	"bytes"
+	"log"
 	"sync"
 
 	"6.5840/kvraft1/rsm"
@@ -22,6 +24,10 @@ type KVServer struct {
 	// Your definitions here.
 	mu      sync.Mutex
 	entries map[string]Entry
+}
+
+type KVSnapshot struct { // 方便扩展
+	Entries map[string]Entry
 }
 
 // To type-cast req to the right type, take a look at Go's type switches or type
@@ -73,11 +79,41 @@ func (kv *KVServer) DoOp(req any) any {
 
 func (kv *KVServer) Snapshot() []byte {
 	// Your code here
-	return nil
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	if err := e.Encode(KVSnapshot{
+		Entries: kv.entries,
+	}); err != nil {
+		panic(err)
+	}
+
+	return w.Bytes()
 }
 
 func (kv *KVServer) Restore(data []byte) {
 	// Your code here
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	if len(data) < 1 {
+		log.Printf("kvserver snapshot is empty")
+		return
+	}
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var kvSnapshot KVSnapshot
+	if d.Decode(&kvSnapshot) != nil {
+		log.Printf("kvserver snapshot decode failed")
+		return
+	}
+	// if len(kvSnapshot.Entries) == 0 { // 空 也应该是合法快照
+	// 	log.Printf("decoded kvserver snapshot is empty")
+	// 	return
+	// }
+
+	kv.entries = kvSnapshot.Entries
 }
 
 func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {
@@ -116,7 +152,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, gid tester.Tgid, me int, persist
 
 	kv := &KVServer{me: me}
 
-	kv.entries = make(map[string]Entry)
+	kv.entries = make(map[string]Entry) // 防止 nil map
 	kv.rsm = rsm.MakeRSM(servers, me, persister, maxraftstate, kv)
 	// You may need initialization code here.
 	return []any{kv, kv.rsm.Raft()}
