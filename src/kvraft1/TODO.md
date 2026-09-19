@@ -45,7 +45,7 @@ Add code to handle failures. Your Clerk can use a similar retry plan as in lab 2
 make RUN="-run 4B" kvraft1
 ```
 
-- [ ] Part C: Key/value service with snapshots
+- [x] Part C: Key/value service with snapshots
 
 Modify your rsm so that it detects when the persisted Raft state grows too large, and then hands a snapshot to Raft. When a rsm server restarts, it should read the snapshot with persister.ReadSnapshot() and, if the snapshot's length is greater than zero, pass the snapshot to the StateMachine's Restore() method. You complete this task if you pass TestSnapshot4C in rsm. 
 

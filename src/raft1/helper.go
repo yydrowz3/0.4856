@@ -127,7 +127,7 @@ func (rf *Raft) replicateToPeer(peer int, leaderTerm int) {
 
 		next := rf.nextIndex[peer]
 
-		if next <= rf.lastIncludedIndex {
+		if next <= rf.lastIncludedIndex { // 发现没有办法跟上的情况，会 send InstallSnapshot
 			args := InstallSnapshotArgs{
 				Term:              rf.currentTerm,
 				LeaderId:          rf.me,
