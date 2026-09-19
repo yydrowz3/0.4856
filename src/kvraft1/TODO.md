@@ -58,6 +58,13 @@ Implement the kvraft1/server.go Snapshot() and Restore() methods, which rsm call
 > A reasonable amount of time to take for the Lab 4 tests is 400 seconds of real time and 700 seconds of CPU time. 
 
   - [x] KVServer Snapshot & Restore
+  - [x] modify rsm structure
+  - [x] add rsm encode / decode function
+  - [x] make rsm restore rsm -> restore sm (KVServer)
+  - [x] installSnapshot helper function
+  - [ ] modify reader()
+  - [ ] modify Submit()
+
 
 ```
 make RUN="-run 4C" kvraft1

@@ -14,6 +14,7 @@ import (
 type applyResult struct {
 	op    Op
 	value any
+	err   rpc.Err
 }
 
 type Op struct {
@@ -23,11 +24,6 @@ type Op struct {
 	Me  int
 	Id  int
 	Req any
-}
-
-type snapshotData struct {
-	LastApplied int
-	State       []byte
 }
 
 // A server (i.e., ../server.go) that wants to replicate itself calls
@@ -73,6 +69,9 @@ type RSM struct {
 // MakeRSM() must return quickly, so it should start goroutines for
 // any long-running work.
 func MakeRSM(servers []*labrpc.ClientEnd, me int, persister *tester.Persister, maxraftstate int, sm StateMachine) *RSM {
+
+	savedSnapshot := persister.ReadSnapshot()
+
 	rsm := &RSM{
 		me:           me,
 		maxraftstate: maxraftstate,
@@ -83,6 +82,12 @@ func MakeRSM(servers []*labrpc.ClientEnd, me int, persister *tester.Persister, m
 	}
 	if !tester.UseRaftStateMachine {
 		rsm.rf = raft.Make(servers, me, persister, rsm.applyCh)
+	}
+
+	if len(savedSnapshot) > 0 {
+		snap := decodeSnapshot(savedSnapshot)
+		rsm.sm.Restore(snap.State)
+		rsm.lastApplied = snap.LastApplied
 	}
 
 	go rsm.reader()
@@ -161,7 +166,7 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) { // 应该是 通过 goroutine �
 	index, startTerm, isLeader := rsm.rf.Start(op)
 	if !isLeader {
 		rsm.mu.Unlock()
-		return rpc.ErrWrongLeader, nil
+		return rpc.ErrWrongLeader, nil // 可以优化，直接告诉谁是 leader
 	}
 
 	ch := make(chan applyResult, 1)
