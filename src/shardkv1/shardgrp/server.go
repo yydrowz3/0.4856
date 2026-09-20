@@ -1,6 +1,7 @@
 package shardgrp
 
 import (
+	"bytes"
 	"sync"
 
 	"6.5840/kvraft1/rsm"
@@ -98,11 +99,42 @@ func (kv *KVServer) DoOp(req any) any {
 
 func (kv *KVServer) Snapshot() []byte {
 	// Your code here
-	return nil
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	var buffer bytes.Buffer
+	encoder := labgob.NewEncoder(&buffer)
+	snapshot := KVSnapshot{
+		Entries: kv.entries,
+		Phase:   kv.phase,
+		Seen:    kv.seen,
+	}
+
+	if err := encoder.Encode(snapshot); err != nil {
+		panic(err)
+	}
+
+	return buffer.Bytes()
 }
 
 func (kv *KVServer) Restore(data []byte) {
 	// Your code here
+	if len(data) == 0 {
+		return
+	}
+
+	var snapshot KVSnapshot
+	decoder := labgob.NewDecoder(bytes.NewBuffer(data))
+	if err := decoder.Decode(&snapshot); err != nil {
+		panic(err)
+	}
+	if snapshot.Entries == nil {
+		snapshot.Entries = make(map[string]Entry)
+	}
+	kv.mu.Lock()
+	kv.entries = snapshot.Entries
+	kv.phase = snapshot.Phase
+	kv.seen = snapshot.Seen
+	kv.mu.Unlock()
 }
 
 func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {
