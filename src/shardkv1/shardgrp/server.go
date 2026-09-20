@@ -188,9 +188,17 @@ func StartServerShardGrp(servers []*labrpc.ClientEnd, gid tester.Tgid, me int, p
 	labgob.Register(rsm.Op{})
 
 	kv := &KVServer{gid: gid, me: me}
-	kv.rsm = rsm.MakeRSM(servers, me, persister, maxraftstate, kv)
+	kv.entries = make(map[string]Entry)
 
 	// Your code here
+	if gid == shardcfg.Gid1 {
+		for shard := range kv.phase {
+			kv.phase[shard] = ShardServing
+			kv.seen[shard] = shardcfg.NumFirst
+		}
+	}
+
+	kv.rsm = rsm.MakeRSM(servers, me, persister, maxraftstate, kv)
 
 	return []any{kv, kv.rsm.Raft()}
 }
