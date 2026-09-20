@@ -5,13 +5,16 @@ package shardctrler
 //
 
 import (
+	"fmt"
 
-	"6.5840/kvsrv1"
-	"6.5840/kvtest1"
+	kvsrv "6.5840/kvsrv1"
+	"6.5840/kvsrv1/rpc"
+	kvtest "6.5840/kvtest1"
 	"6.5840/shardkv1/shardcfg"
-	"6.5840/tester1"
+	tester "6.5840/tester1"
 )
 
+const currentConfigKey = "shardctrler-current-config"
 
 // ShardCtrler for the controller and kv clerk.
 type ShardCtrler struct {
@@ -45,6 +48,19 @@ func (sck *ShardCtrler) InitController() {
 // lists shardgrp shardcfg.Gid1 for all shards.
 func (sck *ShardCtrler) InitConfig(cfg *shardcfg.ShardConfig) {
 	// Your code here
+	want := cfg.String()
+	err := sck.Put(currentConfigKey, want, 0)
+	if err == rpc.OK {
+		return
+	}
+	if err == rpc.ErrMaybe || err == rpc.ErrVersion {
+		got, _, getErr := sck.Get(currentConfigKey)
+		if getErr == rpc.OK && got == want {
+			return
+		}
+	}
+
+	panic(fmt.Sprintf("InitConfig: cannot store initial config %v", err))
 }
 
 // Called by the tester to ask the controller to change the
@@ -55,10 +71,12 @@ func (sck *ShardCtrler) ChangeConfigTo(new *shardcfg.ShardConfig) {
 	// Your code here.
 }
 
-
 // Return the current configuration
 func (sck *ShardCtrler) Query() *shardcfg.ShardConfig {
 	// Your code here.
-	return nil
+	value, _, err := sck.Get(currentConfigKey)
+	if err != rpc.OK {
+		panic(fmt.Sprintf("Query: cannot read current config: %v", err))
+	}
+	return shardcfg.FromString(value)
 }
-

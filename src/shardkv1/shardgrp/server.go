@@ -1,19 +1,39 @@
 package shardgrp
 
 import (
+	"sync"
 
 	"6.5840/kvraft1/rsm"
 	"6.5840/kvsrv1/rpc"
 	"6.5840/labgob"
 	"6.5840/labrpc"
+	"6.5840/shardkv1/shardcfg"
 	"6.5840/shardkv1/shardgrp/shardrpc"
-	"6.5840/tester1"
+	tester "6.5840/tester1"
 )
 
 const (
 	ENVKEY = "65840ENV"
 )
 
+type Entry struct {
+	Value   string
+	Version rpc.Tversion
+}
+
+type ShardPhase uint8
+
+const (
+	ShardAbsent ShardPhase = iota
+	ShardServing
+	ShardFrozen
+)
+
+type KVSnapshot struct {
+	Entries map[string]Entry
+	Phase   [shardcfg.NShards]ShardPhase
+	Seen    [shardcfg.NShards]shardcfg.Tnum
+}
 
 type KVServer struct {
 	me  int
@@ -21,14 +41,27 @@ type KVServer struct {
 	gid tester.Tgid
 
 	// Your code here
+	mu      sync.Mutex
+	entries map[string]Entry
+	phase   [shardcfg.NShards]ShardPhase
+	seen    [shardcfg.NShards]shardcfg.Tnum
 }
 
-
 func (kv *KVServer) DoOp(req any) any {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	switch args := req.(type) {
+	case rpc.GetArgs:
+		s := shardcfg.Key2Shard(args.Key)
+		if kv.phase[s] != ShardServing {
+			return rpc.GetReply{Err: rpc.ErrWrongGroup}
+		}
+	case rpc.PutArgs:
+
+	}
 	// Your code here
 	return nil
 }
-
 
 func (kv *KVServer) Snapshot() []byte {
 	// Your code here
