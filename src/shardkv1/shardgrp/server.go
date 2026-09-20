@@ -24,9 +24,9 @@ type Entry struct {
 type ShardPhase uint8
 
 const (
-	ShardAbsent ShardPhase = iota
-	ShardServing
-	ShardFrozen
+	ShardAbsent  ShardPhase = iota // 不拥有该 shard
+	ShardServing                   // 正常提供服务
+	ShardFrozen                    // shard 正在迁移，暂时冻结
 )
 
 type KVSnapshot struct {
@@ -48,6 +48,7 @@ type KVServer struct {
 }
 
 func (kv *KVServer) DoOp(req any) any {
+	// Your code here
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 	switch args := req.(type) {
@@ -56,11 +57,43 @@ func (kv *KVServer) DoOp(req any) any {
 		if kv.phase[s] != ShardServing {
 			return rpc.GetReply{Err: rpc.ErrWrongGroup}
 		}
+		entry, ok := kv.entries[args.Key]
+		if !ok {
+			return rpc.GetReply{Err: rpc.ErrNoKey}
+		}
+		return rpc.GetReply{
+			Value:   entry.Value,
+			Version: entry.Version,
+			Err:     rpc.OK,
+		}
 	case rpc.PutArgs:
+		s := shardcfg.Key2Shard(args.Key)
+		if kv.phase[s] != ShardServing {
+			return rpc.PutReply{Err: rpc.ErrWrongGroup}
+		}
+		entry, ok := kv.entries[args.Key]
+		if !ok {
+			if args.Version != 0 {
+				return rpc.PutReply{Err: rpc.ErrNoKey}
+			}
+			kv.entries[args.Key] = Entry{Value: args.Value, Version: 1}
+			return rpc.PutReply{Err: rpc.OK}
+		}
+		if args.Version != entry.Version {
+			return rpc.PutReply{Err: rpc.ErrVersion}
+		}
+		kv.entries[args.Key] = Entry{Value: args.Value, Version: entry.Version + 1}
+		return rpc.PutReply{Err: rpc.OK}
 
+	case shardrpc.FreezeShardArgs:
+		return nil
+	case shardrpc.InstallShardArgs:
+		return nil
+	case shardrpc.DeleteShardArgs:
+		return nil
+	default:
+		panic("ShardGrp: unknown operation")
 	}
-	// Your code here
-	return nil
 }
 
 func (kv *KVServer) Snapshot() []byte {
@@ -74,10 +107,22 @@ func (kv *KVServer) Restore(data []byte) {
 
 func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {
 	// Your code here
+	err, result := kv.rsm.Submit(*args)
+	if err != rpc.OK {
+		reply.Err = err
+		return
+	}
+	*reply = result.(rpc.GetReply)
 }
 
 func (kv *KVServer) Put(args *rpc.PutArgs, reply *rpc.PutReply) {
 	// Your code here
+	err, result := kv.rsm.Submit(*args)
+	if err != rpc.OK {
+		reply.Err = err
+		return
+	}
+	*reply = result.(rpc.PutReply)
 }
 
 // Freeze the specified shard (i.e., reject future Get/Puts for this
