@@ -11,6 +11,7 @@ import (
 	"6.5840/kvsrv1/rpc"
 	kvtest "6.5840/kvtest1"
 	"6.5840/shardkv1/shardcfg"
+	"6.5840/shardkv1/shardgrp"
 	tester "6.5840/tester1"
 )
 
@@ -69,6 +70,95 @@ func (sck *ShardCtrler) InitConfig(cfg *shardcfg.ShardConfig) {
 // controller.
 func (sck *ShardCtrler) ChangeConfigTo(new *shardcfg.ShardConfig) {
 	// Your code here.
+	currentValue, currentVersion, err := sck.Get(currentConfigKey)
+	if err != rpc.OK {
+		panic(fmt.Sprintf("ChangeConfigTo: cannot read current config %v", err))
+	}
+
+	old := shardcfg.FromString(currentValue)
+	if old.Num >= new.Num {
+		return
+	}
+
+	if new.Num != old.Num+1 {
+		panic(fmt.Sprintf("ChangeConfigTo: old config %d, new config %d", old.Num, new.Num))
+	}
+
+	clerks := make(map[tester.Tgid]*shardgrp.Clerk)
+	getClerk := func(gid tester.Tgid, servers []string) *shardgrp.Clerk {
+		ck, ok := clerks[gid]
+		if !ok {
+			ck = shardgrp.MakeClerk(sck.clnt, servers)
+			clerks[gid] = ck
+		}
+		return ck
+	}
+
+	for shardIndex := 0; shardIndex < shardcfg.NShards; shardIndex++ {
+		shard := shardcfg.Tshid(shardIndex)
+		oldGid := old.Shards[shard]
+		newGid := new.Shards[shard]
+
+		if oldGid == newGid {
+			continue
+		}
+
+		var state []byte
+
+		// 1. 冻结原 group，并取得 shard 的完整 state
+		if oldGid != 0 {
+			sourceServers, ok := old.Groups[oldGid]
+			if !ok {
+				panic(fmt.Sprintf("ChangeConfigTo: missing source group %d", oldGid))
+			}
+			source := getClerk(oldGid, sourceServers)
+			state, err = source.FreezeShard(shard, new.Num)
+			if err != rpc.OK { // 该controller 可能过期
+				return
+			}
+
+		}
+
+		// 2. 状态 install 到目标 group
+		if newGid != 0 {
+			destinationServers, ok := new.Groups[newGid]
+			if !ok {
+				panic(fmt.Sprintf("ChangeConfigTo: missing destination group %d", newGid))
+			}
+			destination := getClerk(newGid, destinationServers)
+			err = destination.InstallShard(shard, state, new.Num)
+			if err != rpc.OK {
+				return
+			}
+		}
+
+		// 3. install 成功后才删除原数据
+		if oldGid != 0 {
+			sourceServers := old.Groups[oldGid]
+			source := getClerk(oldGid, sourceServers)
+
+			err = source.DeleteShard(shard, new.Num)
+			if err != rpc.OK {
+				return
+			}
+		}
+	}
+
+	// 4. 更新配置
+	newValue := new.String()
+	err = sck.Put(currentConfigKey, newValue, currentVersion)
+	if err == rpc.OK {
+		return
+	}
+
+	if err == rpc.ErrMaybe || err == rpc.ErrVersion { // 有可能有 两个 controller 发布同一个 配置，导致的冲突
+		value, _, getErr := sck.Get(currentConfigKey)
+		if getErr == rpc.OK && value == newValue {
+			return
+		}
+	}
+
+	panic(fmt.Sprintf("ChangeConfigTo: cannot publish config %d: %v", new.Num, err))
 }
 
 // Return the current configuration

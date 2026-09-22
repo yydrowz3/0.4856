@@ -57,7 +57,7 @@ Add code to Clerk to retry if doesn't receive a reply. Your have completed this 
 
 `make kvsrv1`
 
-- [ ] Implementing a lock using key/value clerk and unreliable network
+- [x] Implementing a lock using key/value clerk and unreliable network
 
 Modify your lock implementation to work correctly with your modified key/value client when the network is not reliable. You have completed this exercise when your code passes all the lock1 tests: 
 

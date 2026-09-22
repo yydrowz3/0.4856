@@ -122,6 +122,8 @@ func (kv *KVServer) DoOp(req any) any {
 			}
 
 		}
+
+		return reply
 	case shardrpc.InstallShardArgs: // 先删除到 absent 后才能 install
 		s := args.Shard
 		previousNum := kv.seen[s]
@@ -205,6 +207,8 @@ func (kv *KVServer) DoOp(req any) any {
 	default:
 		panic("ShardGrp: unknown operation")
 	}
+
+	panic("ShardGrp.DoOp: operation produced no reply")
 }
 
 func (kv *KVServer) Snapshot() []byte {
