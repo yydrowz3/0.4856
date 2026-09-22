@@ -49,8 +49,11 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 		ck.leader = (server + 1) % len(ck.servers)
 		attempts++
 
-		if attempts%len(ck.servers) == 0 {
-			time.Sleep(20 * time.Millisecond)
+		// if attempts%len(ck.servers) == 0 {
+		// 	time.Sleep(20 * time.Millisecond)
+		// }
+		if attempts >= len(ck.servers) {
+			return "", 0, rpc.ErrWrongGroup
 		}
 	}
 }
@@ -78,9 +81,9 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 				}
 				return rpc.ErrVersion
 			case rpc.ErrWrongGroup:
-				if retried {
-					return rpc.ErrMaybe
-				}
+				// if retried {
+				// 	return rpc.ErrMaybe
+				// }
 				return rpc.ErrWrongGroup
 			}
 		}
@@ -89,8 +92,11 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 		ck.leader = (server + 1) % len(ck.servers)
 		attempts++
 
-		if attempts%len(ck.servers) == 0 {
-			time.Sleep(20 * time.Millisecond)
+		// if attempts%len(ck.servers) == 0 {
+		// 	time.Sleep(20 * time.Millisecond)
+		// }
+		if attempts >= len(ck.servers) {
+			return rpc.ErrWrongGroup
 		}
 	}
 }

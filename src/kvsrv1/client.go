@@ -1,7 +1,6 @@
 package kvsrv
 
 import (
-	"log"
 	"time"
 
 	"6.5840/kvsrv1/rpc"
@@ -38,7 +37,8 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 		var reply rpc.GetReply
 		ok := ck.clnt.Call(ck.server, "KVServer.Get", &args, &reply)
 		if !ok {
-			log.Printf("Clerk.Get: Call failed for key %s, resend", key)
+			// log.Printf("Clerk.Get: Call failed for key %s, resend", key)
+			DPrintf("Clerk.Get: Call failed for key %s, resend", key)
 		} else {
 			if reply.Err == rpc.OK {
 				return reply.Value, reply.Version, rpc.OK
@@ -89,13 +89,15 @@ func (ck *Clerk) Put(key, value string, version rpc.Tversion) rpc.Err {
 		}
 	} else {
 		// message drop
-		log.Printf("Clerk.Put: First call trial failed for key %s, start resending", key)
+		// log.Printf("Clerk.Put: First call trial failed for key %s, start resending", key)
+		DPrintf("Clerk.Put: First call trial failed for key %s, start resending", key)
 		for {
 
 			time.Sleep(100 * time.Millisecond)
 			ok := ck.clnt.Call(ck.server, "KVServer.Put", &args, &reply)
 			if !ok {
-				log.Printf("Clerk.Put: Call failed for key %s, resend", key)
+				// log.Printf("Clerk.Put: Call failed for key %s, resend", key)
+				DPrintf("Clerk.Put: Call failed for key %s, resend", key)
 			} else {
 				if reply.Err == rpc.OK {
 					return rpc.OK

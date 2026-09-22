@@ -81,6 +81,7 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 	// You will have to modify this function.
 	shard := shardcfg.Key2Shard(key)
+	uncertain := false
 
 	for {
 		cfg := ck.sck.Query()
@@ -98,11 +99,23 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 		}
 
 		err := groupClerk.Put(key, value, version)
-		if err == rpc.ErrWrongGroup {
+
+		switch err {
+		case rpc.OK:
+			return rpc.OK
+		case rpc.ErrWrongGroup:
+			uncertain = true
 			time.Sleep(20 * time.Millisecond)
 			continue
+		case rpc.ErrVersion:
+			if uncertain {
+				return rpc.ErrMaybe
+			}
+			return rpc.ErrVersion
+		case rpc.ErrMaybe:
+			return rpc.ErrMaybe
+		case rpc.ErrNoKey:
+			return rpc.ErrNoKey
 		}
-
-		return err
 	}
 }

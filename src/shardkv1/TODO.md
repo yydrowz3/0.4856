@@ -10,7 +10,7 @@ Reference: BigTable, Spanner, FAWN, Apache HBase, Rosebud, Spinnaker.
 
 ---
 
-- [ ] Part A: Moving shards
+- [x] Part A: Moving shards
 
 In Part A: 
   implement shardctrler -> store and retrieve configurations in a kvsrv
