@@ -87,9 +87,86 @@ func (kv *KVServer) DoOp(req any) any {
 		return rpc.PutReply{Err: rpc.OK}
 
 	case shardrpc.FreezeShardArgs:
-		return nil
-	case shardrpc.InstallShardArgs:
-		return nil
+		s := args.Shard
+		previousNum := kv.seen[s]
+		reply := shardrpc.FreezeShardReply{
+			Num: kv.seen[s],
+		}
+		if args.Num < previousNum {
+			reply.Err = rpc.ErrWrongGroup
+			return reply
+		}
+		// 即使下面的状态转换失败，也会更新 seen
+		isNewNum := args.Num > previousNum
+		if isNewNum {
+			kv.seen[s] = args.Num
+		}
+
+		switch kv.phase[s] {
+		case ShardServing:
+			kv.phase[s] = ShardFrozen
+			reply.State = encodeShard(kv.shardEntriesLocked(s))
+			reply.Err = rpc.OK
+		case ShardFrozen: // Freeze 重试
+			reply.State = encodeShard(kv.shardEntriesLocked(s))
+			reply.Err = rpc.OK
+		case ShardAbsent:
+			if isNewNum { // 新迁移，但是当前 Absent
+				reply.Err = rpc.ErrWrongGroup
+			} else { // 旧迁移，当前可能已经 install + delete 了
+				// Freeze 的响应丢失后，另一 controller 可能已经
+				// Install + Delete。目标 group 会忽略重复 Install。
+				reply.State = encodeShard(kv.shardEntriesLocked(s))
+				reply.Err = rpc.OK
+			}
+
+		}
+	case shardrpc.InstallShardArgs: // 先删除到 absent 后才能 install
+		s := args.Shard
+		previousNum := kv.seen[s]
+		if args.Num < previousNum {
+			return shardrpc.InstallShardReply{
+				Err: rpc.ErrWrongGroup,
+			}
+		}
+
+		isNewNum := args.Num > previousNum
+		if isNewNum {
+			kv.seen[s] = args.Num
+		}
+
+		switch kv.phase[s] {
+		case ShardServing:
+			if !isNewNum {
+				// 重复 Install
+				return shardrpc.InstallShardReply{
+					Err: rpc.OK,
+				}
+			}
+			return shardrpc.InstallShardReply{
+				Err: rpc.ErrWrongGroup,
+			}
+		case ShardFrozen:
+			// 一个 group 不应该在同一轮同时作为源和目标。
+			return shardrpc.InstallShardReply{
+				Err: rpc.ErrWrongGroup,
+			}
+		case ShardAbsent: // 不能直接跳过，因为如果完成 install，会是 serving 状态
+			incoming := decodeShard(args.State)
+			kv.deleteShardLocked(s)
+
+			for key, entry := range incoming {
+				if shardcfg.Key2Shard(key) == s {
+					kv.entries[key] = entry
+				}
+			}
+
+			kv.phase[s] = ShardServing
+			return shardrpc.InstallShardReply{
+				Err: rpc.OK,
+			}
+		}
+
 	case shardrpc.DeleteShardArgs:
 		s := args.Shard
 		previousNum := kv.seen[s]
