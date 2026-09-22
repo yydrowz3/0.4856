@@ -5,6 +5,7 @@ import (
 
 	"6.5840/kvsrv1/rpc"
 	"6.5840/shardkv1/shardcfg"
+	"6.5840/shardkv1/shardgrp/shardrpc"
 	tester "6.5840/tester1"
 )
 
@@ -96,15 +97,95 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 
 func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpc.Err) {
 	// Your code here
-	return nil, ""
+	args := shardrpc.FreezeShardArgs{
+		Shard: s,
+		Num:   num,
+	}
+	attempts := 0
+
+	for {
+		server := ck.leader
+		var reply shardrpc.FreezeShardReply
+
+		ok := ck.Call(ck.servers[server], "KVServer.FreezeShard", &args, &reply)
+		if ok {
+			switch reply.Err {
+			case rpc.OK:
+				if reply.Num != num {
+					return nil, rpc.ErrWrongGroup
+				}
+				return reply.State, rpc.OK
+			case rpc.ErrWrongGroup:
+				return nil, rpc.ErrWrongGroup
+			}
+		}
+
+		ck.leader = (server + 1) % len(ck.servers)
+		attempts++
+
+		if attempts%len(ck.servers) == 0 {
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
 }
 
 func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum) rpc.Err {
 	// Your code here
-	return ""
+	args := shardrpc.InstallShardArgs{
+		Shard: s,
+		State: state,
+		Num:   num,
+	}
+	attempts := 0
+
+	for {
+		server := ck.leader
+		var reply shardrpc.InstallShardReply
+
+		ok := ck.Call(ck.servers[server], "KVServer.InstallShard", &args, &reply)
+
+		if ok {
+			switch reply.Err {
+			case rpc.OK:
+				return rpc.OK
+			case rpc.ErrWrongGroup:
+				return rpc.ErrWrongGroup
+			}
+		}
+		ck.leader = (server + 1) % len(ck.servers)
+		attempts++
+
+		if attempts%len(ck.servers) == 0 {
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+
 }
 
 func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpc.Err {
 	// Your code here
-	return ""
+	args := shardrpc.DeleteShardArgs{
+		Shard: s,
+		Num:   num,
+	}
+	attempts := 0
+	for {
+		server := ck.leader
+		var reply shardrpc.DeleteShardReply
+
+		ok := ck.Call(ck.servers[server], "KVServer.DeleteShard", &args, &reply)
+		if ok {
+			switch reply.Err {
+			case rpc.OK:
+				return rpc.OK
+			case rpc.ErrWrongGroup:
+				return rpc.ErrWrongGroup
+			}
+		}
+		ck.leader = (server + 1) % len(ck.servers)
+		attempts++
+		if attempts%len(ck.servers) == 0 {
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
 }

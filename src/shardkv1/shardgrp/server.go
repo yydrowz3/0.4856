@@ -100,6 +100,7 @@ func (kv *KVServer) DoOp(req any) any {
 		isNewNum := args.Num > previousNum
 		if isNewNum {
 			kv.seen[s] = args.Num
+			reply.Num = args.Num
 		}
 
 		switch kv.phase[s] {
