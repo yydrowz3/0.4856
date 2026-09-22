@@ -91,7 +91,39 @@ func (kv *KVServer) DoOp(req any) any {
 	case shardrpc.InstallShardArgs:
 		return nil
 	case shardrpc.DeleteShardArgs:
-		return nil
+		s := args.Shard
+		previousNum := kv.seen[s]
+		if args.Num < previousNum {
+			return shardrpc.DeleteShardReply{
+				Err: rpc.ErrWrongGroup,
+			}
+		}
+		isNewNum := args.Num > previousNum
+		if isNewNum {
+			kv.seen[s] = args.Num
+		}
+		switch kv.phase[s] {
+		case ShardFrozen:
+			kv.deleteShardLocked(s)
+			kv.phase[s] = ShardAbsent
+			return shardrpc.DeleteShardReply{
+				Err: rpc.OK,
+			}
+		case ShardAbsent:
+			if !isNewNum {
+				return shardrpc.DeleteShardReply{
+					Err: rpc.OK,
+				}
+			}
+			return shardrpc.DeleteShardReply{
+				Err: rpc.ErrWrongGroup,
+			}
+		case ShardServing:
+			return shardrpc.DeleteShardReply{
+				Err: rpc.ErrWrongGroup,
+			}
+		}
+
 	default:
 		panic("ShardGrp: unknown operation")
 	}
@@ -161,16 +193,34 @@ func (kv *KVServer) Put(args *rpc.PutArgs, reply *rpc.PutReply) {
 // shard) and return the key/values stored in that shard.
 func (kv *KVServer) FreezeShard(args *shardrpc.FreezeShardArgs, reply *shardrpc.FreezeShardReply) {
 	// Your code here
+	err, result := kv.rsm.Submit(*args)
+	if err != rpc.OK {
+		reply.Err = err
+		return
+	}
+	*reply = result.(shardrpc.FreezeShardReply)
 }
 
 // Install the supplied state for the specified shard.
 func (kv *KVServer) InstallShard(args *shardrpc.InstallShardArgs, reply *shardrpc.InstallShardReply) {
 	// Your code here
+	err, result := kv.rsm.Submit(*args)
+	if err != rpc.OK {
+		reply.Err = err
+		return
+	}
+	*reply = result.(shardrpc.InstallShardReply)
 }
 
 // Delete the specified shard.
 func (kv *KVServer) DeleteShard(args *shardrpc.DeleteShardArgs, reply *shardrpc.DeleteShardReply) {
 	// Your code here
+	err, result := kv.rsm.Submit(*args)
+	if err != rpc.OK {
+		reply.Err = err
+		return
+	}
+	*reply = result.(shardrpc.DeleteShardReply)
 }
 
 // StartShardServerGrp starts a server for shardgrp `gid`.
