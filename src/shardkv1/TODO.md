@@ -58,7 +58,7 @@ make RUN="-run 5A" shardkv
 ```
 
 
-- [ ] Part B: Handling a failed controller
+- [x] Part B: Handling a failed controller
 
 In Part B: 
   modify shardctrler -> handle failures and partitions during config changes

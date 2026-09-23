@@ -40,7 +40,7 @@ func MakeShardCtrler(clnt *tester.Clnt) *ShardCtrler {
 // controller. In part A, this method doesn't need to do anything. In
 // B and C, this method implements recovery.
 func (sck *ShardCtrler) InitController() {
-	current, currentVersion, err := sck.loadConfig(currentConfigKey)
+	current, currentVersion, err := sck.loadConfig(currentConfigKey) // 崩溃后重启是否应该继续 迁移
 	if err != rpc.OK {
 		panic(fmt.Sprintf("InitController: cannot read config: %v", err))
 	}
