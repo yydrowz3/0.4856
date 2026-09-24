@@ -86,16 +86,14 @@ func (sck *ShardCtrler) ChangeConfigTo(new *shardcfg.ShardConfig) {
 		panic(fmt.Sprintf("ChangeConfigTo: cannot read current config %v", err))
 	}
 
-	// old := shardcfg.FromString(currentValue)
-	// if old.Num >= new.Num {
-	// 	return
-	// }
-	if current.Num >= new.Num {
+	// 过期
+	if new.Num <= current.Num {
 		return
 	}
 
 	if new.Num != current.Num+1 {
-		panic(fmt.Sprintf("ChangeConfigTo: current config %d, new config %d", current.Num, new.Num))
+		// panic(fmt.Sprintf("ChangeConfigTo: current config %d, new config %d", current.Num, new.Num))
+		return
 	}
 
 	next, nextVersion, err := sck.loadConfig(nextConfigKey)
@@ -103,23 +101,35 @@ func (sck *ShardCtrler) ChangeConfigTo(new *shardcfg.ShardConfig) {
 		panic(fmt.Sprintf("ChangeConfigTo: cannot read next config: %v", err))
 	}
 
-	switch {
-	case next.Num == current.Num:
-		// 正常空闲状态，可以发布本次迁移意图。
-	case next.Num == current.Num+1:
-		// 已经有一次未完成的迁移。
-		// 先恢复旧迁移，不能用 new 覆盖它。
-		sck.finishChange(current, next, currentVersion)
+	// next != current 表示已经有人发布了迁移意图。
+	// 当前 controller 是竞争失败者，必须立即返回。
+	if next.Num != current.Num {
 		return
-	default:
-		panic(fmt.Sprintf("ChangeConfigTo: invalid current/next: %d/%d", current.Num, next.Num))
 	}
 
+	// 使用 nextConfigKey 的 KV version 做 CAS。
 	if !sck.storeConfig(nextConfigKey, new, nextVersion) {
 		// 另一个控制器可能抢先写入了 next。
 		return
 	}
 
+	// switch {
+	// case next.Num == current.Num:
+	// 	// 正常空闲状态，可以发布本次迁移意图。
+	// case next.Num == current.Num+1:
+	// 	// 已经有一次未完成的迁移。
+	// 	// 先恢复旧迁移，不能用 new 覆盖它。
+	// 	sck.finishChange(current, next, currentVersion)
+	// 	return
+	// default:
+	// 	panic(fmt.Sprintf("ChangeConfigTo: invalid current/next: %d/%d", current.Num, next.Num))
+	// }
+
+	// if !sck.storeConfig(nextConfigKey, new, nextVersion) {
+	// 	return
+	// }
+
+	// 只有成功发布 next 的 controller 执行迁移。
 	sck.finishChange(current, new, currentVersion)
 }
 
