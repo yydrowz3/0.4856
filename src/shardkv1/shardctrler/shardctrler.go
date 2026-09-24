@@ -6,6 +6,7 @@ package shardctrler
 
 import (
 	"fmt"
+	"time"
 
 	kvsrv "6.5840/kvsrv1"
 	"6.5840/kvsrv1/rpc"
@@ -40,24 +41,31 @@ func MakeShardCtrler(clnt *tester.Clnt) *ShardCtrler {
 // controller. In part A, this method doesn't need to do anything. In
 // B and C, this method implements recovery.
 func (sck *ShardCtrler) InitController() {
-	current, currentVersion, err := sck.loadConfig(currentConfigKey) // 崩溃后重启是否应该继续 迁移
-	if err != rpc.OK {
-		panic(fmt.Sprintf("InitController: cannot read config: %v", err))
-	}
-	next, _, err := sck.loadConfig(nextConfigKey)
-	if err != rpc.OK {
-		panic(fmt.Sprintf("InitController: cannot read next config: %v", err))
-	}
+	for {
+		current, currentVersion, err := sck.loadConfig(currentConfigKey) // 崩溃后重启是否应该继续 迁移
+		if err != rpc.OK {
+			panic(fmt.Sprintf("InitController: cannot read config: %v", err))
+		}
+		next, _, err := sck.loadConfig(nextConfigKey)
+		if err != rpc.OK {
+			panic(fmt.Sprintf("InitController: cannot read next config: %v", err))
+		}
 
-	if next.Num == current.Num {
-		return
-	}
+		switch {
+		case next.Num == current.Num:
+			// 空闲，没有待恢复迁移。
+			return
+		case next.Num == current.Num+1:
+			sck.finishChange(current, next, currentVersion)
+			return
+		default:
+			// 两次 Get 跨越了多个配置提交，不是原子快照。
+			// 重新读取，不要 panic。
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
 
-	if next.Num != current.Num+1 {
-		panic(fmt.Sprintf("InitController: invalid current/next: %d/%d", current.Num, next.Num))
 	}
-
-	sck.finishChange(current, next, currentVersion)
 }
 
 // Called once by the tester to supply the first configuration.  You
@@ -107,8 +115,12 @@ func (sck *ShardCtrler) ChangeConfigTo(new *shardcfg.ShardConfig) {
 		return
 	}
 
+	// if !sck.storeConfig(nextConfigKey, new, nextVersion) {
+	// 	return
+	// }
+
 	// 使用 nextConfigKey 的 KV version 做 CAS。
-	if !sck.storeConfig(nextConfigKey, new, nextVersion) {
+	if !sck.tryPublishNext(new, nextVersion) {
 		// 另一个控制器可能抢先写入了 next。
 		return
 	}

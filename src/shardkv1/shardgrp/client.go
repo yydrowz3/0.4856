@@ -1,8 +1,6 @@
 package shardgrp
 
 import (
-	"time"
-
 	"6.5840/kvsrv1/rpc"
 	"6.5840/shardkv1/shardcfg"
 	"6.5840/shardkv1/shardgrp/shardrpc"
@@ -107,9 +105,8 @@ func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpc.E
 		Shard: s,
 		Num:   num,
 	}
-	attempts := 0
 
-	for {
+	for attempts := 0; attempts < len(ck.servers); attempts++ {
 		server := ck.leader
 		var reply shardrpc.FreezeShardReply
 
@@ -125,14 +122,10 @@ func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpc.E
 				return nil, rpc.ErrWrongGroup
 			}
 		}
-
 		ck.leader = (server + 1) % len(ck.servers)
-		attempts++
-
-		if attempts%len(ck.servers) == 0 {
-			time.Sleep(20 * time.Millisecond)
-		}
 	}
+
+	return nil, rpc.ErrWrongLeader
 }
 
 func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum) rpc.Err {
@@ -142,9 +135,8 @@ func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum)
 		State: state,
 		Num:   num,
 	}
-	attempts := 0
 
-	for {
+	for attempts := 0; attempts < len(ck.servers); attempts++ {
 		server := ck.leader
 		var reply shardrpc.InstallShardReply
 
@@ -158,14 +150,11 @@ func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum)
 				return rpc.ErrWrongGroup
 			}
 		}
-		ck.leader = (server + 1) % len(ck.servers)
-		attempts++
 
-		if attempts%len(ck.servers) == 0 {
-			time.Sleep(20 * time.Millisecond)
-		}
+		ck.leader = (server + 1) % len(ck.servers)
 	}
 
+	return rpc.ErrWrongLeader
 }
 
 func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpc.Err {
@@ -174,8 +163,7 @@ func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpc.Err {
 		Shard: s,
 		Num:   num,
 	}
-	attempts := 0
-	for {
+	for attempts := 0; attempts < len(ck.servers); attempts++ {
 		server := ck.leader
 		var reply shardrpc.DeleteShardReply
 
@@ -188,10 +176,9 @@ func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpc.Err {
 				return rpc.ErrWrongGroup
 			}
 		}
+
 		ck.leader = (server + 1) % len(ck.servers)
-		attempts++
-		if attempts%len(ck.servers) == 0 {
-			time.Sleep(20 * time.Millisecond)
-		}
 	}
+
+	return rpc.ErrWrongLeader
 }

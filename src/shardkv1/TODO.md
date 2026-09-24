@@ -71,7 +71,7 @@ Modify shardctrler to implement the above approach. A controller that picks up t
 make RUN="-run 5B" shardkv
 ```
 
-- [ ] Part C: Concurrent configuration changes
+- [x] Part C: Concurrent configuration changes
 
 In Part C: 
   extend shardctrler -> allow for concurrent controllers without interfering with each other.

@@ -2,6 +2,7 @@ package shardctrler
 
 import (
 	"fmt"
+	"time"
 
 	"6.5840/kvsrv1/rpc"
 	"6.5840/shardkv1/shardcfg"
@@ -61,11 +62,20 @@ func (sck *ShardCtrler) finishChange(old *shardcfg.ShardConfig, new *shardcfg.Sh
 				panic(fmt.Sprintf("ChangeConfigTo: missing source group %d", oldGid))
 			}
 			source := getClerk(oldGid, sourceServers)
-			state, err = source.FreezeShard(shard, new.Num)
-			if err != rpc.OK { // 该controller 可能过期
-				return false
-			}
+			for {
+				state, err = source.FreezeShard(shard, new.Num)
+				if err == rpc.OK {
+					break
+				}
+				if err == rpc.ErrWrongGroup {
+					return false
+				}
+				if !sck.stillPending(old, new) {
+					return false
+				}
 
+				time.Sleep(20 * time.Millisecond)
+			}
 		}
 
 		// 2. 状态 install 到目标 group
@@ -75,9 +85,19 @@ func (sck *ShardCtrler) finishChange(old *shardcfg.ShardConfig, new *shardcfg.Sh
 				panic(fmt.Sprintf("ChangeConfigTo: missing destination group %d", newGid))
 			}
 			destination := getClerk(newGid, destinationServers)
-			err = destination.InstallShard(shard, state, new.Num)
-			if err != rpc.OK {
-				return false
+			for {
+				err = destination.InstallShard(shard, state, new.Num)
+				if err == rpc.OK {
+					break
+				}
+				if err == rpc.ErrWrongGroup {
+					return false
+				}
+				if !sck.stillPending(old, new) {
+					return false
+				}
+
+				time.Sleep(20 * time.Millisecond)
 			}
 		}
 
@@ -85,13 +105,67 @@ func (sck *ShardCtrler) finishChange(old *shardcfg.ShardConfig, new *shardcfg.Sh
 		if oldGid != 0 {
 			sourceServers := old.Groups[oldGid]
 			source := getClerk(oldGid, sourceServers)
+			for {
+				err = source.DeleteShard(shard, new.Num)
+				if err == rpc.OK {
+					break
+				}
+				// 更高配置已经到达该 shard group。
+				if err == rpc.ErrWrongGroup {
+					return false
+				}
+				// 暂时不可达。先判断当前 controller 是否仍有效。
+				if !sck.stillPending(old, new) {
+					return false
+				}
 
-			err = source.DeleteShard(shard, new.Num)
-			if err != rpc.OK {
-				return false
+				time.Sleep(20 * time.Millisecond)
 			}
 		}
 	}
 
 	return sck.storeConfig(currentConfigKey, new, currentVersion)
+}
+
+func (sck *ShardCtrler) tryPublishNext(cfg *shardcfg.ShardConfig, version rpc.Tversion) bool {
+	want := cfg.String()
+	err := sck.Put(nextConfigKey, want, version)
+
+	switch err {
+	case rpc.OK:
+		return true
+	case rpc.ErrVersion:
+		// 第一次 RPC 明确返回版本错误，本 controller 没有成功。
+		return false
+	case rpc.ErrMaybe:
+		got, _, getErr := sck.Get(nextConfigKey)
+		return getErr == rpc.OK && got == want
+	default:
+		return false
+	}
+
+}
+
+func (sck *ShardCtrler) stillPending(old *shardcfg.ShardConfig, new *shardcfg.ShardConfig) bool {
+	current, _, err := sck.loadConfig(currentConfigKey)
+	if err != rpc.OK {
+		return false
+	}
+
+	// current 已经提交 new，或者已经进入更高配置。
+	if current.Num >= new.Num {
+		return false
+	}
+
+	// 确认当前迁移仍然是自己正在执行的那一次。
+	if current.String() != old.String() {
+		return false
+	}
+
+	next, _, err := sck.loadConfig(nextConfigKey)
+	if err != rpc.OK {
+		return false
+	}
+
+	return next.String() == new.String()
 }
