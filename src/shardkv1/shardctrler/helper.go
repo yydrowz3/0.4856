@@ -63,7 +63,12 @@ func (sck *ShardCtrler) finishChange(old *shardcfg.ShardConfig, new *shardcfg.Sh
 			}
 			source := getClerk(oldGid, sourceServers)
 			for {
+				if !sck.stillPending(old, new) {
+					return false
+				}
+
 				state, err = source.FreezeShard(shard, new.Num)
+
 				if err == rpc.OK {
 					break
 				}
@@ -86,6 +91,10 @@ func (sck *ShardCtrler) finishChange(old *shardcfg.ShardConfig, new *shardcfg.Sh
 			}
 			destination := getClerk(newGid, destinationServers)
 			for {
+				if !sck.stillPending(old, new) {
+					return false
+				}
+
 				err = destination.InstallShard(shard, state, new.Num)
 				if err == rpc.OK {
 					break
@@ -106,6 +115,10 @@ func (sck *ShardCtrler) finishChange(old *shardcfg.ShardConfig, new *shardcfg.Sh
 			sourceServers := old.Groups[oldGid]
 			source := getClerk(oldGid, sourceServers)
 			for {
+				if !sck.stillPending(old, new) {
+					return false
+				}
+
 				err = source.DeleteShard(shard, new.Num)
 				if err == rpc.OK {
 					break
